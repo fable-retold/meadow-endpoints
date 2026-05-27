@@ -157,3 +157,4 @@ out
 
 # Indoctrinate catalog staging cache
 Indoctrinate-Catalog-AppData.json
+dist/indoctrinate_content_staging/
