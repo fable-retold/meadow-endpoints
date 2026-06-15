@@ -54,6 +54,7 @@ const doAPIEndpointUndelete = function(pRequest, pResponse, fNext)
 			{
 				// Now see if the record, with this identifier, for this user, exists with the deleted bit set to 1
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 				tmpRequestState.Query.addFilter(this.DAL.defaultIdentifier, tmpIDRecord);
 				tmpRequestState.Query.addFilter('Deleted', 1);
 				tmpRequestState.Query.setIDUser(tmpRequestState.SessionData.UserID);

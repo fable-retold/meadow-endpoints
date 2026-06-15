@@ -15,6 +15,7 @@ const doAPIEndpointReadDistinct = function(pRequest, pResponse, fNext)
 		(fStageComplete) =>
 		{
 			tmpRequestState.Query = this.DAL.query.setDistinct(true);
+			this.stampSessionOverrideOnQuery(tmpRequestState);
 
 			/** @type {number | boolean} */
 			let tmpCap = false;

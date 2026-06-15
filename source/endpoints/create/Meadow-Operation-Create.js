@@ -31,6 +31,7 @@ const doCreate = function(pRecord, pRequest, pRequestState, pResponse, fCallback
 		{
 			// Prepare create query
 			tmpRequestState.Query = this.DAL.query;
+			this.stampSessionOverrideOnQuery(tmpRequestState);
 			tmpRequestState.Query.setIDUser(tmpRequestState.SessionData.UserID);
 			tmpRequestState.Query.addRecord(tmpRequestState.RecordToCreate);
 			return fStageComplete();

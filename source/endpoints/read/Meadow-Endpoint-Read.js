@@ -11,6 +11,7 @@ const doAPIEndpointRead = function(pRequest, pResponse, fNext)
 			(fStageComplete) =>
 			{
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 				return fStageComplete();
 			},
 			fBehaviorInjector(`Read-PreOperation`),

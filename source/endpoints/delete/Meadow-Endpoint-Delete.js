@@ -36,6 +36,7 @@ const doAPIEndpointDelete = function(pRequest, pResponse, fNext)
 			(fStageComplete) =>
 			{
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 				tmpRequestState.Query.addFilter(this.DAL.defaultIdentifier, tmpRequestState.IDRecord);
 				tmpRequestState.Query.setIDUser(tmpRequestState.SessionData.UserID);
 				return fStageComplete();

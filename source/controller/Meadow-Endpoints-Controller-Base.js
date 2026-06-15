@@ -155,6 +155,46 @@ class MeadowEndpointControllerBase
 	{
 		return this._SessionMarshaler.getSessionData(pRequest);
 	}
+
+	/**
+	 * Stamp the request's session onto a meadow query so a downstream provider
+	 * can act under the caller's identity.
+	 *
+	 * Today only the MeadowEndpoints provider consumes this — when a beacon
+	 * fronts a remote meadow-endpoints API it presents this session upstream
+	 * (instead of its bound machine session) so the remote enforces row-level
+	 * auth as the real caller. SQL providers ignore the parameter. The override
+	 * rides the per-operation FoxHound query (concurrency-safe).
+	 *
+	 * No-op for the default/anonymous session (UserID 0 / SessionID 0x0000) —
+	 * those carry no identity, so the provider keeps its existing behavior.
+	 *
+	 * @param {object} pRequestState - the request state (carries SessionData + Query)
+	 * @returns {void}
+	 */
+	stampSessionOverrideOnQuery(pRequestState)
+	{
+		if (!pRequestState || !pRequestState.Query || !pRequestState.SessionData)
+		{
+			return;
+		}
+		let tmpSession = pRequestState.SessionData;
+		let tmpSessionID = tmpSession.SessionID;
+		if (typeof(tmpSessionID) !== 'string' || tmpSessionID.length < 1 || tmpSessionID === '0x0000')
+		{
+			return;
+		}
+		if (pRequestState.Query.query && pRequestState.Query.query.parameters)
+		{
+			pRequestState.Query.query.parameters.MeadowEndpointsSessionOverride = (
+				{
+					SessionID: tmpSessionID,
+					CustomerID: tmpSession.CustomerID,
+					UserID: tmpSession.UserID,
+					UserRoleIndex: tmpSession.UserRoleIndex
+				});
+		}
+	}
 }
 
 module.exports = MeadowEndpointControllerBase;

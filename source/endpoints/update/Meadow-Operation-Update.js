@@ -33,6 +33,7 @@ const doUpdate = function(pRecordToModify, pRequest, pRequestState, pResponse, f
 			else
 			{
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 
 				tmpRequestState.Query.addFilter(this.DAL.defaultIdentifier, tmpRequestState.RecordToModify[this.DAL.defaultIdentifier]);
 
@@ -64,6 +65,7 @@ const doUpdate = function(pRecordToModify, pRequest, pRequestState, pResponse, f
 		(fStageComplete) =>
 		{
 			tmpRequestState.Query = this.DAL.query;
+			this.stampSessionOverrideOnQuery(tmpRequestState);
 			return fStageComplete();
 		},
 		fBehaviorInjector(`Update-PreOperation`),

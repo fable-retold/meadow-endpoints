@@ -14,6 +14,7 @@ const doUpsert = function(pRecordToUpsert, pRequest, pRequestState, pResponse, f
 			(fStageComplete) =>
 			{
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 
 				// Prepare to gather requirements for upserting
 				tmpRequestState.Record = pRecordToUpsert;

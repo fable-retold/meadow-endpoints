@@ -11,6 +11,7 @@ const doAPIEndpointCountBy = function(pRequest, pResponse, fNext)
 			(fStageComplete) =>
 			{
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 				tmpRequestState.Query.addFilter(pRequest.params.ByField, pRequest.params.ByValue, '=', 'AND', 'RequestByField');
 				return fStageComplete();
 			},

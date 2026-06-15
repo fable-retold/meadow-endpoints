@@ -14,6 +14,7 @@ const doAPIEndpointReadLite = function(pRequest, pResponse, fNext)
 			(fStageComplete) =>
 			{
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 				// TODO: Limit the query to the columns we need for the templated expression
 
 				/** @type {number | boolean} */

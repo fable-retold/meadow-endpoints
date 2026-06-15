@@ -11,6 +11,7 @@ const doAPIEndpointCount = function(pRequest, pResponse, fNext)
 			(fStageComplete) =>
 			{
 				tmpRequestState.Query = this.DAL.query;
+				this.stampSessionOverrideOnQuery(tmpRequestState);
 				if (typeof(pRequest.params.Filter) === 'string')
 				{
 					// If a filter has been passed in, parse it and add the values to the query.
