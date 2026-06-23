@@ -589,6 +589,102 @@ suite
 				);
 				test
 				(
+					'query: reads all records via JSON body (default mode)',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.post('1.0/FableTests/Query')
+						.send({})
+						.end(
+							function (pError, pResponse)
+							{
+								var tmpResults = JSON.parse(pResponse.text);
+								Expect(tmpResults).to.be.an('array');
+								Expect(tmpResults.length).to.equal(6);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'query: reads with filter in the body',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.post('1.0/FableTests/Query')
+						.send({ Filter: 'FBV~Type~EQ~Dog' })
+						.end(
+							function (pError, pResponse)
+							{
+								var tmpResults = JSON.parse(pResponse.text);
+								Expect(tmpResults).to.be.an('array');
+								Expect(tmpResults.length).to.equal(2);
+								Expect(tmpResults[0].Type).to.equal('Dog');
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'query: Lite read via boolean flag with pagination',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.post('1.0/FableTests/Query')
+						.send({ Lite: true, Begin: 0, Cap: 3 })
+						.end(
+							function (pError, pResponse)
+							{
+								var tmpResults = JSON.parse(pResponse.text);
+								Expect(tmpResults).to.be.an('array');
+								Expect(tmpResults.length).to.equal(3);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'query: Distinct read via boolean flag and Columns',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.post('1.0/FableTests/Query')
+						.send({ Distinct: true, Columns: 'Type' })
+						.end(
+							function (pError, pResponse)
+							{
+								var tmpResults = JSON.parse(pResponse.text);
+								Expect(tmpResults).to.be.an('array');
+								Expect(tmpResults.length).to.be.at.least(1);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'query: Count flag takes precedence and honors the filter',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.post('1.0/FableTests/Query')
+						.send({ Lite: true, Count: true, Filter: 'FBV~Type~EQ~Dog' })
+						.end(
+							function (pError, pResponse)
+							{
+								var tmpResults = JSON.parse(pResponse.text);
+								Expect(tmpResults).to.have.property('Count');
+								Expect(tmpResults.Count).to.equal(2);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
 					'readsLiteExtended: get all records',
 					function(fDone)
 					{

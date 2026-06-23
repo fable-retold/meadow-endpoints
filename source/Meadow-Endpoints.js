@@ -54,6 +54,9 @@ var MeadowEndpoints = function()
 			Reads: require('./crud/Meadow-Endpoint-Reads.js'),
 			ReadsBy: require('./crud/Meadow-Endpoint-ReadsBy.js'),
 
+			// Body-driven read: filter/pagination/mode travel in a JSON POST body
+			Query: require('./crud/Meadow-Endpoint-Query.js'),
+
 			ReadSelectList: require('./crud/Meadow-Endpoint-ReadSelectList.js'),
 			ReadLiteList: require('./crud/Meadow-Endpoint-ReadLiteList.js'),
 			ReadDistinctList: require('./crud/Meadow-Endpoint-ReadDistinctList.js'),
@@ -343,6 +346,7 @@ var MeadowEndpoints = function()
 			}
 			if (_EnabledBehaviors.Reads)
 			{
+				pRestServer.post(`${tmpEndpointPrefix}s/Query`, _CommonServices.bodyParser(), _EndpointAuthenticators.Reads, wireState, _Endpoints.Query);
 				pRestServer.get(`${tmpEndpointPrefix}s`, _EndpointAuthenticators.Reads, wireState, _Endpoints.Reads);
 				pRestServer.get(`${tmpEndpointPrefix}s/By/:ByField/:ByValue`, _EndpointAuthenticators.Reads, wireState, _Endpoints.ReadsBy);
 				pRestServer.get(`${tmpEndpointPrefix}s/By/:ByField/:ByValue/:Begin/:Cap`, _EndpointAuthenticators.Reads, wireState, _Endpoints.ReadsBy);
