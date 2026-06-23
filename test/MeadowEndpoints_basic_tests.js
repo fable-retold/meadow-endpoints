@@ -506,6 +506,103 @@ suite
 				);
 				test
 				(
+					"query: reads all records via JSON body (default mode)",
+					function (fDone)
+					{
+						_SuperTest
+							.post("1.0/Books/Query")
+							.send({})
+							.end(
+								(pError, pResponse) =>
+								{
+									Expect(pError).to.not.exist;
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult).to.be.an("array");
+									Expect(tmpResult.length).to.be.at.least(5);
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
+					"query: reads with filter and pagination in the body",
+					function (fDone)
+					{
+						_SuperTest
+							.post("1.0/Books/Query")
+							.send({ Filter: "FBV~Genre~LK~%Science%", Begin: 0, Cap: 1 })
+							.end(
+								(pError, pResponse) =>
+								{
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult).to.be.an("array");
+									Expect(tmpResult.length).to.equal(1);
+									Expect(tmpResult[0].Genre).to.contain("Science");
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
+					"query: Lite read via boolean flag",
+					function (fDone)
+					{
+						_SuperTest
+							.post("1.0/Books/Query")
+							.send({ Lite: true, Begin: 0, Cap: 3 })
+							.end(
+								(pError, pResponse) =>
+								{
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult).to.be.an("array");
+									Expect(tmpResult.length).to.equal(3);
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
+					"query: Distinct read via boolean flag and Columns",
+					function (fDone)
+					{
+						_SuperTest
+							.post("1.0/Books/Query")
+							.send({ Distinct: true, Columns: "Genre" })
+							.end(
+								(pError, pResponse) =>
+								{
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult).to.be.an("array");
+									Expect(tmpResult.length).to.be.at.least(1);
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
+					"query: Count flag takes precedence and honors the filter",
+					function (fDone)
+					{
+						_SuperTest
+							.post("1.0/Books/Query")
+							.send({ Lite: true, Count: true, Filter: "FBV~Genre~LK~%Science%" })
+							.end(
+								(pError, pResponse) =>
+								{
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult).to.have.property("Count");
+									Expect(tmpResult.Count).to.be.at.least(3);
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
 					'reads by: get records filtered by a field value',
 					function (fDone)
 					{

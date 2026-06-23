@@ -73,6 +73,9 @@ class MeadowEndpoints
 			Reads: require('./endpoints/read/Meadow-Endpoint-Reads.js'),
 			ReadsBy: require('./endpoints/read/Meadow-Endpoint-ReadsBy.js'),
 
+			// Body-driven read: filter/pagination/mode travel in a JSON POST body
+			Query: require('./endpoints/read/Meadow-Endpoint-Query.js'),
+
 			ReadSelectList: require('./endpoints/read/Meadow-Endpoint-ReadSelectList.js'),
 			ReadLiteList: require('./endpoints/read/Meadow-Endpoint-ReadLiteList.js'),
 			ReadDistinctList: require('./endpoints/read/Meadow-Endpoint-ReadDistinctList.js'),
@@ -183,6 +186,7 @@ class MeadowEndpoints
 		}
 		if (this._EnabledBehaviorSets.Reads)
 		{
+			this.connectRoute(pServiceServer, 'postWithBodyParser', `s/Query`, this._Endpoints.Query, `the internal behavior _Endpoints.Query`);
 			this.connectRoute(pServiceServer, 'get', `s`, this._Endpoints.Reads, `the internal behavior _Endpoints.Reads`);
 			this.connectRoute(pServiceServer, 'get', `s/By/:ByField/:ByValue`, this._Endpoints.ReadsBy, `the internal behavior _Endpoints.ReadsBy`);
 			this.connectRoute(pServiceServer, 'get', `s/By/:ByField/:ByValue/:Begin/:Cap`, this._Endpoints.ReadsBy, `the internal behavior _Endpoints.ReadsBy`);
