@@ -6,6 +6,8 @@
 * @author Steven Velozo <steven@velozo.com>
 * @module Meadow
 */
+var libVersion = require('../Meadow-Endpoints-Version.js');
+
 /**
 * Get the JSONSchema for a particular scope
 */
@@ -25,9 +27,16 @@ var doAPISchemaEndpoint = function(pRequest, pResponse, fNext)
 
 	// INJECT: Pre endpoint operation
 
-	var tmpSchema = pRequest.DAL.jsonSchema;
+	// Shallow-clone so the version metadata is not stamped onto the DAL's
+	// shared jsonSchema object.
+	var tmpSchema = Object.assign({}, pRequest.DAL.jsonSchema);
 
 	// INJECT: After the schema is grabbed, let the user alter it
+
+	// Advertise meadow-endpoints version & capability metadata so clients can
+	// detect transport features (e.g. POST /Query) without probing routes.
+	// Additive, non-standard key; JSON Schema consumers ignore unknown keywords.
+	tmpSchema.RetoldMetadata = libVersion.getVersionMetadata();
 
 	pRequest.CommonServices.log.info('Delivered a JSON schema for '+pRequest.DAL.scope, {SessionID:pRequest.UserSession.SessionID, RequestID:pRequest.RequestUUID, RequestURL:pRequest.url, Action:pRequest.DAL.scope+'-Schema'}, pRequest);
 	pResponse.send(tmpSchema);

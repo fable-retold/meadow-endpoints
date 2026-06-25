@@ -1305,6 +1305,28 @@ suite
 				);
 				test
 				(
+					'schema: advertises RetoldMetadata version map and capabilities',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.get('1.0/FableTest/Schema')
+						.end(
+							function (pError, pResponse)
+							{
+								var tmpResults = JSON.parse(pResponse.text);
+								Expect(tmpResults).to.have.property('RetoldMetadata');
+								Expect(tmpResults.RetoldMetadata).to.have.property('PackageVersions');
+								Expect(tmpResults.RetoldMetadata.PackageVersions).to.have.property('meadow-endpoints');
+								Expect(tmpResults.RetoldMetadata.PackageVersions['meadow-endpoints']).to.be.a('string');
+								Expect(tmpResults.RetoldMetadata).to.have.property('Capabilities');
+								Expect(tmpResults.RetoldMetadata.Capabilities.QueryEndpoint).to.equal(true);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
 					'schema: get the schema of a record',
 					function(fDone)
 					{
