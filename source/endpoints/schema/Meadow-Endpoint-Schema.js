@@ -1,6 +1,8 @@
 /**
 * Meadow Endpoint - Get the Record Schema
 */
+const libVersion = require('../../Meadow-Endpoints-Version.js');
+
 const doAPIEndpointSchema = function (pRequest, pResponse, fNext)
 {
 	let tmpRequestState = this.initializeRequestState(pRequest, 'Schema');
@@ -15,6 +17,14 @@ const doAPIEndpointSchema = function (pRequest, pResponse, fNext)
 				if (!pRequest.JSONSchema)
 				{
 					tmpRequestState.JSONSchema = this.extend({}, this.DAL.jsonSchema);
+				}
+				// Advertise meadow-endpoints version & capability metadata so
+				// clients can detect transport features (e.g. POST /Query) without
+				// probing routes. Additive, non-standard key; JSON Schema consumers
+				// ignore unknown keywords.
+				if (tmpRequestState.JSONSchema && typeof(tmpRequestState.JSONSchema) === 'object')
+				{
+					tmpRequestState.JSONSchema.RetoldMetadata = libVersion.getVersionMetadata();
 				}
 				return fStageComplete();
 			},

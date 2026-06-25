@@ -8,6 +8,7 @@
 		"outDir": "dist",
 		"declarationMap": true,
 		"checkJs": true,
-		"lib": ["ES2020", "dom"]
+		"lib": ["ES2020", "dom"],
+		"resolveJsonModule": true
 	}
 }

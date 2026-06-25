@@ -1177,6 +1177,30 @@ suite
 				);
 				test
 				(
+					'schema: advertises RetoldMetadata version map and capabilities',
+					function (fDone)
+					{
+						_SuperTest
+							.get('1.0/Book/Schema')
+							.end(
+								(pError, pResponse) =>
+								{
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult).to.have.property('RetoldMetadata');
+									Expect(tmpResult.RetoldMetadata).to.have.property('PackageVersions');
+									Expect(tmpResult.RetoldMetadata.PackageVersions).to.have.property('meadow-endpoints');
+									// The deployed version should report itself; meadow is a hard dependency.
+									Expect(tmpResult.RetoldMetadata.PackageVersions['meadow-endpoints']).to.be.a('string');
+									Expect(tmpResult.RetoldMetadata.PackageVersions).to.have.property('meadow');
+									Expect(tmpResult.RetoldMetadata).to.have.property('Capabilities');
+									Expect(tmpResult.RetoldMetadata.Capabilities.QueryEndpoint).to.equal(true);
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
 					'new: get a default empty record',
 					function (fDone)
 					{
