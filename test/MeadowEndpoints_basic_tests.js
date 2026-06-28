@@ -603,6 +603,33 @@ suite
 				);
 				test
 				(
+					"query: URL-decodes a filter in the body the way the GET route would",
+					function (fDone)
+					{
+						// 'The Da Vinci Code' carries a space; a LIKE match for it is
+						// written `%Da Vinci%`. As a filter it is URL-encoded for the GET
+						// route's :Filter path segment (% -> %25, space -> %20), which the
+						// HTTP layer decodes. The body-driven Query route must decode it
+						// too, or the literal `%25Da%20Vinci%25` is sent to SQL and matches
+						// nothing.
+						_SuperTest
+							.post("1.0/Books/Query")
+							.send({ Filter: "FBV~Title~LK~%25Da%20Vinci%25" })
+							.end(
+								(pError, pResponse) =>
+								{
+									Expect(pError).to.not.exist;
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult).to.be.an("array");
+									Expect(tmpResult.length).to.equal(1);
+									Expect(tmpResult[0].Title).to.equal("The Da Vinci Code");
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
 					'reads by: get records filtered by a field value',
 					function (fDone)
 					{

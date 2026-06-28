@@ -31,6 +31,38 @@ const doCount = require('../count/Meadow-Endpoint-Count.js');
 // the same inputs they read from the URI.
 const PARAM_KEYS = [ 'Filter', 'Begin', 'Cap', 'ExtraColumns', 'Columns' ];
 
+// Body keys whose GET-route counterpart is a URI path segment (`:Filter`,
+// `:ExtraColumns`, `:Columns`), which the HTTP layer URL-decodes before the
+// read handlers see it. The POST body carries these verbatim, so we decode
+// them here to hand the delegated handlers the exact same value the GET path
+// would have. Begin/Cap are numeric and need no decoding.
+const URL_DECODED_PARAM_KEYS = [ 'Filter', 'ExtraColumns', 'Columns' ];
+
+/**
+* URL-decode a body value the way the HTTP layer decodes the matching GET path
+* segment. A malformed percent-sequence (which would also break the GET path)
+* falls back to the raw value rather than throwing.
+*
+* @param {*} pValue - the body value to decode
+*
+* @return {*} the decoded value, or the original if it is not a decodable string
+*/
+const decodeParamValue = function(pValue)
+{
+	if (typeof(pValue) !== 'string')
+	{
+		return pValue;
+	}
+	try
+	{
+		return decodeURIComponent(pValue);
+	}
+	catch (pDecodeError)
+	{
+		return pValue;
+	}
+};
+
 /**
 * Resolve the read mode from the request body flags, by precedence:
 * Count > Distinct > Lite > Reads (the default).
@@ -65,7 +97,9 @@ const doAPIEndpointQuery = function(pRequest, pResponse, fNext)
 	{
 		if (typeof(tmpBody[PARAM_KEYS[i]]) !== 'undefined')
 		{
-			pRequest.params[PARAM_KEYS[i]] = tmpBody[PARAM_KEYS[i]];
+			pRequest.params[PARAM_KEYS[i]] = (URL_DECODED_PARAM_KEYS.indexOf(PARAM_KEYS[i]) !== -1)
+				? decodeParamValue(tmpBody[PARAM_KEYS[i]])
+				: tmpBody[PARAM_KEYS[i]];
 		}
 	}
 

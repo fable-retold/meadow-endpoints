@@ -1,6 +1,6 @@
 {
   "name": "meadow-endpoints",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "description": "Automatic API endpoints for Meadow data.",
   "main": "source/Meadow-Endpoints.js",
   "scripts": {
