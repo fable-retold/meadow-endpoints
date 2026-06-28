@@ -685,6 +685,32 @@ suite
 				);
 				test
 				(
+					'query: URL-decodes a filter in the body the way the GET route would',
+					function(fDone)
+					{
+						// 'Foo Foo' carries a space; a LIKE match for it is written
+						// `%Foo Foo%`. As a filter it is URL-encoded for the GET route's
+						// :Filter path segment (% -> %25, space -> %20), which the HTTP
+						// layer decodes. The body-driven Query route must decode it too,
+						// or the literal `%25Foo%20Foo%25` is sent to SQL and matches
+						// nothing.
+						libSuperTest('http://localhost:9080/')
+						.post('1.0/FableTests/Query')
+						.send({ Filter: 'FBV~Name~LK~%25Foo%20Foo%25' })
+						.end(
+							function (pError, pResponse)
+							{
+								var tmpResults = JSON.parse(pResponse.text);
+								Expect(tmpResults).to.be.an('array');
+								Expect(tmpResults.length).to.equal(1);
+								Expect(tmpResults[0].Name).to.equal('Foo Foo');
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
 					'readsLiteExtended: get all records',
 					function(fDone)
 					{
