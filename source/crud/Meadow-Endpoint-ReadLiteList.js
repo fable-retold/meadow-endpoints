@@ -42,6 +42,11 @@ var doAPIReadLiteEndpoint = function(pRequest, pResponse, fNext)
 					typeof(pRequest.params.Begin) === 'number')
 				{
 					tmpBegin = parseInt(pRequest.params.Begin, 10);
+					if (isNaN(tmpBegin))
+					{
+						pRequest.CommonServices.log.warn('Ignoring non-numeric Begin parameter ['+pRequest.params.Begin+'].', {RequestID:pRequest.RequestUUID, RequestURL:pRequest.url, Action:pRequest.DAL.scope+'-ReadLite'}, pRequest);
+						tmpBegin = false;
+					}
 				}
 				if (typeof(pRequest.params.Cap) === 'string' ||
 					typeof(pRequest.params.Cap) === 'number')
@@ -51,6 +56,11 @@ var doAPIReadLiteEndpoint = function(pRequest, pResponse, fNext)
 				else
 				{
 					//maximum number of records to return by default on Read queries. Override via "MeadowDefaultMaxCap" fable setting.
+					tmpCap = pRequest.DEFAULT_MAX_CAP;
+				}
+				if (isNaN(tmpCap))
+				{
+					pRequest.CommonServices.log.warn('Ignoring non-numeric Cap parameter ['+pRequest.params.Cap+']; falling back to the default maximum cap.', {RequestID:pRequest.RequestUUID, RequestURL:pRequest.url, Action:pRequest.DAL.scope+'-ReadLite'}, pRequest);
 					tmpCap = pRequest.DEFAULT_MAX_CAP;
 				}
 				pRequest.Query.setCap(tmpCap).setBegin(tmpBegin);
