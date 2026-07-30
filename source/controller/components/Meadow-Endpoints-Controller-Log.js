@@ -54,6 +54,29 @@ class MeadowEndpointsControllerLogBase
 		this._Controller.log.info(pActionSummary, this.prepareLogData(pRequest, pRequestState, tmpLogData));
 	}
 
+	/**
+	 * This is called whenever an endpoint needs to warn about a request without failing it
+	 *
+	 * @param {Record<string, any>} pRequest - the request being warned about
+	 * @param {Record<string, any>} pRequestState - the request state (carries SessionData + Verb)
+	 * @param {string} pWarningSummary - the warning text to log
+	 * @returns {void}
+	 */
+	requestWarning(pRequest, pRequestState, pWarningSummary)
+	{
+		let tmpLogData = (
+			{
+				SessionID: pRequestState.SessionData.SessionID,
+				RequestID: pRequest.RequestUUID,
+				RequestURL: pRequest.url,
+				Scope: this._Controller.DAL.scope,
+				Action: `${this._Controller.DAL.scope}-${pRequestState.Verb}`,
+				Verb: pRequestState.Verb
+			});
+
+		this._Controller.log.warn(pWarningSummary, this.prepareLogData(pRequest, pRequestState, tmpLogData));
+	}
+
 	// This is called whenever an endpoint is completed successfully
 	logRequestError(pRequest, pRequestState, pError)
 	{

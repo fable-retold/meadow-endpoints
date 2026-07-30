@@ -195,6 +195,60 @@ class MeadowEndpointControllerBase
 				});
 		}
 	}
+
+	/**
+	 * Resolve the Begin and Cap pagination parameters for a read request and set
+	 * them on the request state's query.
+	 *
+	 * Values that do not parse as integers are discarded rather than passed along:
+	 * FoxHound rejects a NaN cap and falls back to an uncapped query, so a
+	 * malformed Cap would otherwise read the entire table. Cap defaults to the
+	 * "MeadowDefaultMaxCap" fable setting (250 when unset), and an explicit Cap of
+	 * 0 still means uncapped.
+	 *
+	 * @param {Record<string, any>} pRequest - the request (carries the Begin/Cap params)
+	 * @param {Record<string, any>} pRequestState - the request state (carries Query + Verb)
+	 * @returns {void}
+	 */
+	stampPaginationOnQuery(pRequest, pRequestState)
+	{
+		if (!pRequestState || !pRequestState.Query)
+		{
+			return;
+		}
+
+		let tmpParams = (pRequest && typeof(pRequest.params) === 'object' && pRequest.params) ? pRequest.params : {};
+		let tmpDefaultCap = (this.settings['MeadowDefaultMaxCap']) || 250;
+
+		/** @type {number | boolean} */
+		let tmpBegin = false;
+		/** @type {number | boolean} */
+		let tmpCap = tmpDefaultCap;
+
+		if (typeof(tmpParams.Begin) === 'string' ||
+			typeof(tmpParams.Begin) === 'number')
+		{
+			tmpBegin = parseInt(tmpParams.Begin, 10);
+			if (isNaN(tmpBegin))
+			{
+				this.log.requestWarning(pRequest, pRequestState, `Ignoring non-numeric Begin parameter [${tmpParams.Begin}].`);
+				tmpBegin = false;
+			}
+		}
+
+		if (typeof(tmpParams.Cap) === 'string' ||
+			typeof(tmpParams.Cap) === 'number')
+		{
+			tmpCap = parseInt(tmpParams.Cap, 10);
+			if (isNaN(tmpCap))
+			{
+				this.log.requestWarning(pRequest, pRequestState, `Ignoring non-numeric Cap parameter [${tmpParams.Cap}]; falling back to the default maximum cap of ${tmpDefaultCap}.`);
+				tmpCap = tmpDefaultCap;
+			}
+		}
+
+		pRequestState.Query.setCap(tmpCap).setBegin(tmpBegin);
+	}
 }
 
 module.exports = MeadowEndpointControllerBase;

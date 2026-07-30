@@ -17,26 +17,7 @@ const doAPIEndpointReadDistinct = function(pRequest, pResponse, fNext)
 			tmpRequestState.Query = this.DAL.query.setDistinct(true);
 			this.stampSessionOverrideOnQuery(tmpRequestState);
 
-			/** @type {number | boolean} */
-			let tmpCap = false;
-			/** @type {number | boolean} */
-			let tmpBegin = false;
-			if (typeof(pRequest.params.Begin) === 'string' ||
-				typeof(pRequest.params.Begin) === 'number')
-			{
-				tmpBegin = parseInt(pRequest.params.Begin, 10);
-			}
-			if (typeof(pRequest.params.Cap) === 'string' ||
-				typeof(pRequest.params.Cap) === 'number')
-			{
-				tmpCap = parseInt(pRequest.params.Cap, 10);
-			}
-			else
-			{
-				//maximum number of records to return by default on Read queries. Override via "MeadowDefaultMaxCap" fable setting.
-				tmpCap = (this.settings['MeadowDefaultMaxCap']) || 250;
-			}
-			tmpRequestState.Query.setCap(tmpCap).setBegin(tmpBegin);
+			this.stampPaginationOnQuery(pRequest, tmpRequestState);
 			if (typeof(pRequest.params.Filter) === 'string')
 			{
 				// If a filter has been passed in, parse it and add the values to the query.

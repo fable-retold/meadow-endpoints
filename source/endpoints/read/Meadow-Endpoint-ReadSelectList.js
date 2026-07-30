@@ -13,25 +13,7 @@ const doAPIEndpointReadSelectList = function(pRequest, pResponse, fNext)
 				tmpRequestState.Query = this.DAL.query;
 				this.stampSessionOverrideOnQuery(tmpRequestState);
 
-				/** @type {number | boolean} */
-				var tmpCap = false;
-				/** @type {number | boolean} */
-				var tmpBegin = false;
-				if (typeof(pRequest.params.Begin) === 'string' ||
-					typeof(pRequest.params.Begin) === 'number')
-				{
-					tmpBegin = parseInt(pRequest.params.Begin);
-				}
-				if (typeof(pRequest.params.Cap) === 'string' ||
-					typeof(pRequest.params.Cap) === 'number')
-				{
-					tmpCap = parseInt(pRequest.params.Cap);
-				}
-				else
-				{
-					tmpCap = (this.settings['MeadowDefaultMaxCap']) || 250;
-				}
-				tmpRequestState.Query.setCap(tmpCap).setBegin(tmpBegin);
+				this.stampPaginationOnQuery(pRequest, tmpRequestState);
 				if (typeof(pRequest.params.Filter) === 'string')
 				{
 					this.parseFilter(pRequest.params.Filter, tmpRequestState.Query);

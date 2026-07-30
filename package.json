@@ -1,6 +1,6 @@
 {
   "name": "meadow-endpoints",
-  "version": "4.1.1",
+  "version": "4.1.2",
   "description": "Automatic API endpoints for Meadow data.",
   "main": "source/Meadow-Endpoints.js",
   "scripts": {
@@ -48,13 +48,13 @@
   },
   "homepage": "https://github.com/fable-retold/meadow-endpoints",
   "devDependencies": {
-    "alasql": "^4.17.2",
+    "alasql": "^4.17.3",
     "chance": "^1.1.13",
     "gulp-util": "^3.0.8",
-    "meadow-connection-sqlite": "^1.0.20",
-    "mysql2": "^3.22.1",
-    "orator-serviceserver-restify": "^2.0.11",
-    "papaparse": "^5.5.3",
+    "meadow-connection-sqlite": "^1.0.21",
+    "mysql2": "^3.23.2",
+    "orator-serviceserver-restify": "^2.0.12",
+    "papaparse": "^5.5.4",
     "pict-docuserve": "^1.4.19",
     "quackage": "^1.3.0",
     "supertest": "^7.2.2",
@@ -63,12 +63,12 @@
   },
   "dependencies": {
     "async": "3.2.6",
-    "fable": "^3.1.78",
+    "fable": "^3.1.80",
     "fable-serviceproviderbase": "^3.0.19",
     "JSONStream": "^1.3.5",
-    "meadow": "^2.0.46",
+    "meadow": "^2.0.47",
     "meadow-filter": "^1.0.10",
-    "orator": "^6.1.2",
+    "orator": "^6.1.3",
     "underscore": "^1.13.8"
   }
 }

@@ -17,26 +17,7 @@ const doAPIEndpointReadLite = function(pRequest, pResponse, fNext)
 				this.stampSessionOverrideOnQuery(tmpRequestState);
 				// TODO: Limit the query to the columns we need for the templated expression
 
-				/** @type {number | boolean} */
-				var tmpCap = false;
-				/** @type {number | boolean} */
-				var tmpBegin = false;
-				if (typeof(pRequest.params.Begin) === 'string' ||
-					typeof(pRequest.params.Begin) === 'number')
-				{
-					tmpBegin = parseInt(pRequest.params.Begin, 10);
-				}
-				if (typeof(pRequest.params.Cap) === 'string' ||
-					typeof(pRequest.params.Cap) === 'number')
-				{
-					tmpCap = parseInt(pRequest.params.Cap, 10);
-				}
-				else
-				{
-					//maximum number of records to return by default on Read queries. Override via "MeadowDefaultMaxCap" fable setting.
-					tmpCap = (this.settings['MeadowDefaultMaxCap']) || 250;
-				}
-				tmpRequestState.Query.setCap(tmpCap).setBegin(tmpBegin);
+				this.stampPaginationOnQuery(pRequest, tmpRequestState);
 				if (typeof(pRequest.params.Filter) === 'string')
 				{
 					// If a filter has been passed in, parse it and add the values to the query.
