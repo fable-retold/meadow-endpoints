@@ -22,8 +22,14 @@ const doUpsert = function(pRecordToUpsert, pRequest, pRequestState, pResponse, f
 				// This operation will be create only if there is no GUID or ID in the record bundle
 				tmpRequestState.UpsertCreateOnly = true;
 
-				// See if there is a default identifier or default GUIdentifier
-				if ((typeof(tmpRequestState.Record[this.DAL.defaultGUIdentifier]) !== 'undefined') && tmpRequestState.Record[this.DAL.defaultGUIdentifier].length > 0)
+				// See if there is a default identifier or default GUIdentifier.
+				// The GUIdentifier is checked for `string` rather than merely
+				// `!== undefined`: a null reaches the second clause as a null
+				// dereference, and because this runs inside a waterfall the
+				// TypeError escapes the handler and the request hangs with no
+				// response at all. Serializers that emit every schema column
+				// produce { GUID<Entity>: null } routinely.
+				if ((typeof(tmpRequestState.Record[this.DAL.defaultGUIdentifier]) === 'string') && tmpRequestState.Record[this.DAL.defaultGUIdentifier].length > 0)
 				{
 					tmpRequestState.Query.addFilter(this.DAL.defaultGUIdentifier, tmpRequestState.Record[this.DAL.defaultGUIdentifier]);
 					tmpRequestState.UpsertCreateOnly = false;

@@ -982,6 +982,76 @@ suite
 							);
 					}
 				);
+				// A null GUID reaches the identifier check as `typeof null ===
+				// 'object'`, which is not 'undefined', so the guard admits it
+				// and the `.length` read that follows is on null. Serializers
+				// that emit every schema column produce this shape routinely.
+				test
+				(
+					'upsert: a null GUID is treated as absent, not dereferenced',
+					function (fDone)
+					{
+						_SuperTest
+							.put('1.0/Book/Upsert')
+							.send({ GUIDBook: null, Title: 'Null GUID Upsert', Genre: 'Test' })
+							.end(
+								(pError, pResponse) =>
+								{
+									Expect(pResponse.status).to.equal(200);
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult.Title).to.equal('Null GUID Upsert');
+									Expect(tmpResult.IDBook).to.be.above(0);
+									fDone();
+								}
+							);
+					}
+				);
+				test
+				(
+					'upsert: a null default identifier is treated as absent',
+					function (fDone)
+					{
+						_SuperTest
+							.put('1.0/Book/Upsert')
+							.send({ IDBook: null, Title: 'Null ID Upsert', Genre: 'Test' })
+							.end(
+								(pError, pResponse) =>
+								{
+									Expect(pResponse.status).to.equal(200);
+									let tmpResult = JSON.parse(pResponse.text);
+									Expect(tmpResult.Title).to.equal('Null ID Upsert');
+									Expect(tmpResult.IDBook).to.be.above(0);
+									fDone();
+								}
+							);
+					}
+				);
+				// One malformed row must not take the batch down with it — the
+				// bulk endpoint's per-row accounting is what callers use to
+				// decide whether a write is complete.
+				test
+				(
+					'upserts: a null GUID on one row does not fail the batch',
+					function (fDone)
+					{
+						_SuperTest
+							.put('1.0/Book/Upserts')
+							.send([
+								{ GUIDBook: null, Title: 'Bulk Null GUID Row' },
+								{ Title: 'Bulk Clean Row' }
+							])
+							.end(
+								(pError, pResponse) =>
+								{
+									Expect(pResponse.status).to.equal(200);
+									Expect(pResponse.headers['x-meadow-upsert-total']).to.equal('2');
+									Expect(pResponse.headers['x-meadow-upsert-succeeded']).to.equal('2');
+									Expect(pResponse.headers['x-meadow-upsert-errored']).to.equal('0');
+									fDone();
+								}
+							);
+					}
+				);
 			}
 		);
 
