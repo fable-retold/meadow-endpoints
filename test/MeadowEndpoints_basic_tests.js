@@ -2754,6 +2754,85 @@ suite
 						);
 					}
 				);
+				// A null GUID clears the `typeof !== 'undefined'` guard in the
+				// upsert identifier check, so the `.length` read after it used
+				// to throw out of the waterfall rather than falling through to
+				// a create.
+				test
+				(
+					'upsert: a null GUID is treated as absent, not dereferenced',
+					function(fDone)
+					{
+						var tmpRecord = {GUIDAnimal:null, Name:'Nullo', Type:'Pterodactyl'};
+						_MockSessionValidUser.UserRoleIndex = 2;
+						libSuperTest('http://localhost:9080/')
+						.put('1.0/FableTest/Upsert')
+						.send(tmpRecord)
+						.end(
+							function(pError, pResponse)
+							{
+								// Expect a created record back, not a 500.
+								var tmpResult = JSON.parse(pResponse.text);
+								Expect(tmpResult.Name).to.equal('Nullo');
+								Expect(tmpResult.Type).to.equal('Pterodactyl');
+								Expect(tmpResult.IDAnimal).to.be.above(0);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'upsert: a null default identifier is treated as absent',
+					function(fDone)
+					{
+						var tmpRecord = {IDAnimal:null, Name:'Nullid', Type:'Ichthyosaur'};
+						_MockSessionValidUser.UserRoleIndex = 2;
+						libSuperTest('http://localhost:9080/')
+						.put('1.0/FableTest/Upsert')
+						.send(tmpRecord)
+						.end(
+							function(pError, pResponse)
+							{
+								var tmpResult = JSON.parse(pResponse.text);
+								Expect(tmpResult.Name).to.equal('Nullid');
+								Expect(tmpResult.Type).to.equal('Ichthyosaur');
+								Expect(tmpResult.IDAnimal).to.be.above(0);
+								fDone();
+							}
+						);
+					}
+				);
+				// A throw inside doUpsert escapes eachSeries, so it takes down
+				// the whole batch rather than being isolated to its own record
+				// the way a data error is. The second record proves the batch
+				// kept going.
+				test
+				(
+					'bulk upserts: a null GUID on one record does not fail the batch',
+					function(fDone)
+					{
+						_MeadowEndpoints.behaviorModifications.setTemplate('SelectList', '<%= Record.Name %>|<%=Record.Type%>');
+						var tmpRecords = [
+							{GUIDAnimal:null, Name:'Nullbulk', Type:'Plesiosaur'},
+							{GUIDAnimal:'0xMartino', Name:'Martin', Type:'Wolfhound'}
+						];
+						_MockSessionValidUser.UserRoleIndex = 2;
+						libSuperTest('http://localhost:9080/')
+						.put('1.0/FableTest/Upserts')
+						.send(tmpRecords)
+						.end(
+							function(pError, pResponse)
+							{
+								var tmpResult = JSON.parse(pResponse.text);
+								console.log(JSON.stringify(tmpResult,null,4));
+								Expect(tmpResult[0].Value).to.equal('Nullbulk|Plesiosaur');
+								Expect(tmpResult[1].Value).to.equal('Martin|Wolfhound');
+								fDone();
+							}
+						);
+					}
+				);
 			}
 		);
 	}

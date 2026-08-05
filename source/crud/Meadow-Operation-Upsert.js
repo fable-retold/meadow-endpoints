@@ -32,8 +32,14 @@ var doUpsert = function(pRecordToUpsert, pRequest, pResponse, fCallback)
 				// This operation will be create only if there is no GUID or ID in the record bundle
 				pRequest.UpsertCreateOnly = true;
 
-				// See if there is a default identifier or default GUIdentifier
-				if ((typeof(pRecordToUpsert[pRequest.DAL.defaultGUIdentifier]) !== 'undefined') && pRecordToUpsert[pRequest.DAL.defaultGUIdentifier].length > 0)
+				// See if there is a default identifier or default GUIdentifier.
+				// The GUIdentifier is checked for `string` rather than merely
+				// `!== undefined`: a null passes that guard and the `.length`
+				// read below then throws out of the waterfall, which fails the
+				// whole request (and, on a bulk upsert, every record after it).
+				// Serializers that emit each schema column produce
+				// { GUID<Entity>: null } routinely.
+				if ((typeof(pRecordToUpsert[pRequest.DAL.defaultGUIdentifier]) === 'string') && pRecordToUpsert[pRequest.DAL.defaultGUIdentifier].length > 0)
 				{
 					tmpQuery.addFilter(pRequest.DAL.defaultGUIdentifier, pRecordToUpsert[pRequest.DAL.defaultGUIdentifier]);
 					pRequest.UpsertCreateOnly = false;
