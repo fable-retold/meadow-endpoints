@@ -1833,8 +1833,8 @@ var _LogLevel=0;// The dialect to use when generating queries
 		*
 		* @method clone
 		* @return {Object} Returns a cloned Query.  This is still chainable.
-		*/var clone=function(){var tmpFoxHound=createNew(_Fable,baseParameters).setScope(_Parameters.scope).setBegin(_Parameters.begin).setCap(_Parameters.cap);// Schema is the only part of a query that carries forward.
-tmpFoxHound.query.schema=_Parameters.query.schema;if(_Parameters.dataElements){tmpFoxHound.parameters.dataElements=_Parameters.dataElements.slice();// Copy the array of dataElements
+		*/var clone=function(){var tmpFoxHound=createNew(_Fable,baseParameters).setScope(_Parameters.scope).setBegin(_Parameters.begin).setCap(_Parameters.cap);// Schema and the identity column are the only parts of a query that carry forward.
+tmpFoxHound.query.schema=_Parameters.query.schema;tmpFoxHound.query.defaultIdentifier=_Parameters.query.defaultIdentifier;if(_Parameters.dataElements){tmpFoxHound.parameters.dataElements=_Parameters.dataElements.slice();// Copy the array of dataElements
 }if(_Parameters.sort){tmpFoxHound.parameters.sort=_Parameters.sort.slice();// Copy the sort array.
 // TODO: Fix the side affect nature of these being objects in the array .. they are technically clones of the previous.
 }if(_Parameters.filter){tmpFoxHound.parameters.filter=_Parameters.filter.slice();// Copy the filter array.
@@ -1846,6 +1846,7 @@ tmpFoxHound.query.schema=_Parameters.query.schema;if(_Parameters.dataElements){t
 		* @method resetParameters
 		* @return {Object} Returns the current Query for chaining.
 		*/var resetParameters=function(){_Parameters=_Fable.Utility.extend({},baseParameters,_DefaultParameters);_Parameters.query={disableAutoIdentity:false,disableAutoDateStamp:false,disableAutoUserStamp:false,disableDeleteTracking:false,body:false,schema:false,// The schema to intersect with our records
+defaultIdentifier:false,// The identity column, used to give paged reads a total order
 IDUser:0,// The user to stamp into records
 UUID:_Fable.getUUID(),// A UUID for this record
 records:false,// The records to be created or changed
@@ -2143,6 +2144,7 @@ query:false,/*
 			{
 				body: false,
 				schema: false,   // The schema to intersect with our records
+				defaultIdentifier: false, // The identity column, used to give paged reads a total order
 				IDUser: 0,       // The User ID to stamp into records
 				UUID: A_UUID,    // Some globally unique record id, different per cloned query.
 				records: false,  // The records to be created or changed
@@ -2229,6 +2231,33 @@ tmpWhere+=' )';}else if(tmpFilter[i].Operator==='IN'){tmpColumnParameter=tmpFilt
 tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Operator+' ( :'+tmpColumnParameter+' )';pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;}else if(tmpFilter[i].Operator==='IS NOT NULL'){// IS NOT NULL is a special operator which doesn't require a value, or parameter
 tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Operator;}else{tmpColumnParameter=tmpFilter[i].Parameter+'_w'+i;// Add the column name, operator and parameter name to the list of where value parenthetical
 tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Operator+' :'+tmpColumnParameter;pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;}}return tmpWhere;};/**
+	* Find the column that gives a read a total order.
+	*
+	* An AutoIdentity schema entry is preferred because it is known to exist on
+	* the table.  `defaultIdentifier` is meadow's DefaultIdentifier, which is
+	* correct for primary keys that aren't auto-increment — but it falls back to
+	* 'ID'+Scope when nothing set it, so it is only trusted when the schema
+	* confirms the column is real.
+	*
+	* @method: findIdentityColumn
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {String|null} The column name, or null if none can be resolved
+	*/var findIdentityColumn=function(pParameters){var tmpQuery=pParameters.query&&typeof pParameters.query==='object'?pParameters.query:{};var tmpSchema=Array.isArray(tmpQuery.schema)?tmpQuery.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}if(typeof tmpQuery.defaultIdentifier==='string'&&tmpQuery.defaultIdentifier){for(var j=0;j<tmpSchema.length;j++){if(tmpSchema[j].Column===tmpQuery.defaultIdentifier){return tmpQuery.defaultIdentifier;}}}return null;};/**
+	* Resolve the sort a capped read should actually run with.
+	*
+	* LIMIT/FETCH over a sort that isn't a total order has no defined paging
+	* behavior: pages can overlap and drop rows.  Appending the identity column
+	* makes the order total, so pages partition the result set.  A
+	* caller-supplied sort still leads; the identity column only breaks ties.
+	*
+	* @method: resolveStableSort
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {Array} The sort array to emit
+	*/var resolveStableSort=function(pParameters){var tmpSort=Array.isArray(pParameters.sort)?pParameters.sort.slice():[];// Only paged reads need a total order.  DISTINCT rejects an ORDER BY
+// term that isn't in the select list, and a query override owns its own
+// clause placement (it may be grouping), so neither can take one.
+if(!pParameters.cap||pParameters.distinct||pParameters.queryOverride||pParameters.disableStableSort){return tmpSort;}var tmpIdentityColumn=findIdentityColumn(pParameters);if(!tmpIdentityColumn){return tmpSort;}for(var i=0;i<tmpSort.length;i++){if(String(tmpSort[i].Column).split('.').pop()===tmpIdentityColumn){// Already a total order.
+return tmpSort;}}tmpSort.push({Column:tmpIdentityColumn,Direction:'Ascending'});return tmpSort;};/**
 	* Generate an ORDER BY clause from the sort array
 	*
 	* Each entry in the sort is an object like:
@@ -2237,7 +2266,7 @@ tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Ope
 	* @method: generateOrderBy
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String} Returns the field list clause
-	*/var generateOrderBy=function(pParameters){var tmpOrderBy=pParameters.sort;if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+escapeColumn(tmpOrderBy[i].Column,pParameters);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
+	*/var generateOrderBy=function(pParameters){var tmpOrderBy=resolveStableSort(pParameters);if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+escapeColumn(tmpOrderBy[i].Column,pParameters);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
 	* Generate the limit clause
 	*
 	* @method: generateLimit
@@ -2601,11 +2630,16 @@ return`ID${pParameters.scope}`;};/**
 	 * @method: generateWhere
 	 * @param {Object} pParameters SQL Query Parameters
 	 * @return {String} Returns the WHERE clause prefixed with WHERE, or an empty string if unnecessary
-	 */var generateWhere=function(pParameters){var tmpFilter=Array.isArray(pParameters.filter)?pParameters.filter:[];var tmpTableName=generateTableName(pParameters);var tmpURL='';let tmpfAddFilter=(pFilterCommand,pFilterParameters)=>{if(tmpURL.length>0){tmpURL+='~';}tmpURL+=`${pFilterCommand}~${pFilterParameters[0]}~${pFilterParameters[1]}~${pFilterParameters[2]}`;};let tmpfTranslateOperator=pOperator=>{let tmpNewOperator='EQ';switch(pOperator.toUpperCase()){case'!=':tmpNewOperator='NE';break;case'>':tmpNewOperator='GT';break;case'>=':tmpNewOperator='GE';break;case'<=':tmpNewOperator='LE';break;case'<':tmpNewOperator='LT';break;case'LIKE':tmpNewOperator='LK';break;case'IN':tmpNewOperator='INN';break;case'NOT IN':tmpNewOperator='NI';break;}return tmpNewOperator;};// Translating Delete Tracking bit on query to a query with automagic
+	 */var generateWhere=function(pParameters){var tmpFilter=Array.isArray(pParameters.filter)?pParameters.filter:[];var tmpTableName=generateTableName(pParameters);var tmpURL='';let tmpfAddFilter=(pFilterCommand,pFilterParameters)=>{if(tmpURL.length>0){tmpURL+='~';}tmpURL+=`${pFilterCommand}~${pFilterParameters[0]}~${pFilterParameters[1]}~${pFilterParameters[2]}`;};let tmpfTranslateOperator=pOperator=>{let tmpNewOperator='EQ';switch(pOperator.toUpperCase()){case'!=':tmpNewOperator='NE';break;case'>':tmpNewOperator='GT';break;case'>=':tmpNewOperator='GE';break;case'<=':tmpNewOperator='LE';break;case'<':tmpNewOperator='LT';break;case'LIKE':tmpNewOperator='LK';break;case'IN':tmpNewOperator='INN';break;case'NOT IN':tmpNewOperator='NIN';break;}return tmpNewOperator;};// Translating Delete Tracking bit on query to a query with automagic
 // This will eventually deprecate this as part of the necessary query
 if(pParameters.query.disableDeleteTracking){tmpfAddFilter('FBV',['Deleted','GE','0']);}for(var i=0;i<tmpFilter.length;i++){if(tmpFilter[i].Operator==='('){tmpfAddFilter('FOP',['0','(','0']);}else if(tmpFilter[i].Operator===')'){// Close a logical grouping
-tmpfAddFilter('FCP',['0',')','0']);}else if(tmpFilter[i].Operator==='IN'||tmpFilter[i].Operator==="NOT IN"){let tmpFilterCommand='FBV';if(tmpFilter[i].Connector=='OR'){tmpFilterCommand='FBVOR';}// Add the column name, operator and parameter name to the list of where value parenthetical
-tmpfAddFilter(tmpFilterCommand,[tmpFilter[i].Column,tmpfTranslateOperator(tmpFilter[i].Operator),tmpFilter[i].Value.map(encodeURIComponent).join(',')]);}else if(tmpFilter[i].Operator==='IS NULL'){// IS NULL is a special operator which doesn't require a value, or parameter
+tmpfAddFilter('FCP',['0',')','0']);}else if(tmpFilter[i].Operator==='IN'||tmpFilter[i].Operator==="NOT IN"){// FBL, not FBV: only the list stanzas split their value on
+// commas at the far end. An FBV carrying "a,b,c" arrives
+// upstream as the single scalar string "a,b,c", and a numeric
+// column then coerces it to its leading integer — the whole
+// list silently collapses to its first element.
+let tmpFilterCommand='FBL';if(tmpFilter[i].Connector=='OR'){tmpFilterCommand='FBLOR';}let tmpValues=Array.isArray(tmpFilter[i].Value)?tmpFilter[i].Value:[tmpFilter[i].Value];// Add the column name, operator and parameter name to the list of where value parenthetical
+tmpfAddFilter(tmpFilterCommand,[tmpFilter[i].Column,tmpfTranslateOperator(tmpFilter[i].Operator),tmpValues.map(encodeURIComponent).join(',')]);}else if(tmpFilter[i].Operator==='IS NULL'){// IS NULL is a special operator which doesn't require a value, or parameter
 tmpfAddFilter('FBV',[tmpFilter[i].Column,'IN','0']);}else if(tmpFilter[i].Operator==='IS NOT NULL'){// IS NOT NULL is a special operator which doesn't require a value, or parameter
 tmpfAddFilter('FBV',[tmpFilter[i].Column,'NN','0']);}else{let tmpFilterCommand='FBV';if(tmpFilter[i].Connector=='OR'){tmpFilterCommand='FBVOR';}// Add the column name, operator and parameter name to the list of where value parenthetical
 tmpfAddFilter(tmpFilterCommand,[tmpFilter[i].Column,tmpfTranslateOperator(tmpFilter[i].Operator),encodeURIComponent(tmpFilter[i].Value)]);}}let tmpOrderBy=generateOrderBy(pParameters);if(tmpOrderBy){if(tmpURL){tmpURL+='~';}tmpURL+=tmpOrderBy;}return tmpURL;};/**
@@ -2754,30 +2788,60 @@ tmpWhere+=' ['+tmpFilter[i].Column+'] '+tmpFilter[i].Operator+' ( @'+tmpColumnPa
 generateMSSQLParameterTypeEntry(pParameters,tmpColumnParameter,tmpFilter[i].Parameter);}else if(tmpFilter[i].Operator==='IS NULL'){// IS NULL is a special operator which doesn't require a value, or parameter
 tmpWhere+=' ['+tmpFilter[i].Column+'] '+tmpFilter[i].Operator;}else if(tmpFilter[i].Operator==='IS NOT NULL'){// IS NOT NULL is a special operator which doesn't require a value, or parameter
 tmpWhere+=' ['+tmpFilter[i].Column+'] '+tmpFilter[i].Operator;}else{tmpColumnParameter=tmpFilter[i].Parameter+'_w'+i;var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];var tmpJsonRef=resolveJsonColumnPath(tmpFilter[i].Column,tmpSchema);if(tmpJsonRef){tmpWhere+=' JSON_VALUE(['+tmpJsonRef.column+"], '"+tmpJsonRef.path+"') "+tmpFilter[i].Operator+' :'+tmpColumnParameter;}else{tmpWhere+=' ['+tmpFilter[i].Column+'] '+tmpFilter[i].Operator+' @'+tmpColumnParameter;}pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;generateMSSQLParameterTypeEntry(pParameters,tmpColumnParameter,tmpFilter[i].Parameter);}}return tmpWhere;};/**
-	* Find the table's AutoIdentity primary-key column from the schema, if any.
-	* Used as a deterministic default ORDER BY when the caller didn't set a
-	* sort — MSSQL pagination (both OFFSET/FETCH and ROW_NUMBER) requires an
-	* ORDER BY clause or it produces a syntax error.
+	* Find the column whose value the database generates on INSERT.
+	*
+	* Ordering asks a different question; see findIdentityColumn.
 	*
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String|null} The column name, or null if none found
 	*/var findPrimaryKeyColumn=function(pParameters){var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}return null;};/**
+	* Find the column that gives a read a total order.
+	*
+	* An AutoIdentity schema entry is preferred because it is known to exist on
+	* the table.  `defaultIdentifier` is meadow's DefaultIdentifier, which is
+	* correct for primary keys that aren't auto-increment — but it falls back to
+	* 'ID'+Scope when nothing set it, so it is only trusted when the schema
+	* confirms the column is real.
+	*
+	* @method: findIdentityColumn
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {String|null} The column name, or null if none can be resolved
+	*/var findIdentityColumn=function(pParameters){var tmpQuery=pParameters.query&&typeof pParameters.query==='object'?pParameters.query:{};var tmpSchema=Array.isArray(tmpQuery.schema)?tmpQuery.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}if(typeof tmpQuery.defaultIdentifier==='string'&&tmpQuery.defaultIdentifier){for(var j=0;j<tmpSchema.length;j++){if(tmpSchema[j].Column===tmpQuery.defaultIdentifier){return tmpQuery.defaultIdentifier;}}}return null;};/**
+	* Resolve the sort a capped read should actually run with.
+	*
+	* Paging over a sort that isn't a total order has no defined behavior: pages
+	* can overlap and drop rows.  Appending the identity column makes the order
+	* total, so pages partition the result set.  A caller-supplied sort still
+	* leads; the identity column only breaks ties.
+	*
+	* The ORDER BY clause is emitted unqualified here, so a joined read gets no
+	* scope prefix — an ambiguous-column error is preferable to the silently
+	* wrong `[Animal.IDAnimal]` this dialect's bracket quoting would produce.
+	*
+	* @method: resolveStableSort
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {Array} The sort array to emit
+	*/var resolveStableSort=function(pParameters){var tmpSort=Array.isArray(pParameters.sort)?pParameters.sort.slice():[];// Only paged reads need a total order.  DISTINCT rejects an ORDER BY
+// term that isn't in the select list, and a query override owns its own
+// clause placement (it may be grouping), so neither can take one.
+if(!pParameters.cap||pParameters.distinct||pParameters.queryOverride||pParameters.disableStableSort){return tmpSort;}var tmpIdentityColumn=findIdentityColumn(pParameters);if(!tmpIdentityColumn){return tmpSort;}for(var i=0;i<tmpSort.length;i++){if(String(tmpSort[i].Column).split('.').pop()===tmpIdentityColumn){// Already a total order.
+return tmpSort;}}tmpSort.push({Column:tmpIdentityColumn,Direction:'Ascending'});return tmpSort;};/**
 	* Generate an ORDER BY clause from the sort array
 	*
 	* Each entry in the sort is an object like:
 	* {Column:'Color',Direction:'Descending'}
 	*
-	* When no sort is specified but the query has a cap (pagination is
-	* active), inject a default ORDER BY on the primary key so MSSQL
-	* doesn't reject the OFFSET/FETCH or ROW_NUMBER clause.  Without a
-	* schema the PK can't be inferred — fall back to `ORDER BY (SELECT 1)`
-	* which is legal for OFFSET/FETCH but not for ROW_NUMBER (the legacy
-	* pagination path handles that case by refusing to paginate).
+	* A capped read has the identity column appended as a final tiebreaker so
+	* paging is deterministic.  MSSQL pagination (both OFFSET/FETCH and
+	* ROW_NUMBER) also *requires* an ORDER BY or it is a syntax error, so when
+	* no sort survives resolution we fall back to `ORDER BY (SELECT 1)` — legal
+	* for OFFSET/FETCH but not for ROW_NUMBER (the legacy pagination path
+	* handles that case by refusing to paginate).
 	*
 	* @method: generateOrderBy
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String} Returns the field list clause
-	*/var generateOrderBy=function(pParameters){var tmpOrderBy=pParameters.sort;if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){if(pParameters.cap){var tmpPK=findPrimaryKeyColumn(pParameters);if(tmpPK){return' ORDER BY ['+tmpPK+']';}return' ORDER BY (SELECT 1)';}return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' ['+tmpOrderBy[i].Column+']';if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
+	*/var generateOrderBy=function(pParameters){var tmpOrderBy=resolveStableSort(pParameters);if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){if(pParameters.cap){return' ORDER BY (SELECT 1)';}return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' ['+tmpOrderBy[i].Column+']';if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
 	* Generate the limit clause
 	*
 	* When `legacyPagination` is set on pParameters the limit is emitted
@@ -3167,6 +3231,37 @@ tmpWhere+=' '+tmpFilter[i].Column+' '+tmpFilter[i].Operator;}else if(tmpFilter[i
 tmpWhere+=' '+tmpFilter[i].Column+' '+tmpFilter[i].Operator;}else{tmpColumnParameter=tmpFilter[i].Parameter+'_w'+i;// Check for JSON path references (e.g. Metadata.habitat)
 var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];var tmpJsonRef=resolveJsonColumnPath(tmpFilter[i].Column,tmpSchema);if(tmpJsonRef){tmpWhere+=' JSON_EXTRACT(`'+tmpJsonRef.column+"`, '"+tmpJsonRef.path+"') "+tmpFilter[i].Operator+' :'+tmpColumnParameter;}else{// Add the column name, operator and parameter name to the list of where value parenthetical
 tmpWhere+=' '+tmpFilter[i].Column+' '+tmpFilter[i].Operator+' :'+tmpColumnParameter;}pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;}}return tmpWhere;};/**
+	* Find the column that gives a read a total order.
+	*
+	* An AutoIdentity schema entry is preferred because it is known to exist on
+	* the table.  `defaultIdentifier` is meadow's DefaultIdentifier, which is
+	* correct for primary keys that aren't auto-increment — but it falls back to
+	* 'ID'+Scope when nothing set it, so it is only trusted when the schema
+	* confirms the column is real.
+	*
+	* @method: findIdentityColumn
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {String|null} The column name, or null if none can be resolved
+	*/var findIdentityColumn=function(pParameters){var tmpQuery=pParameters.query&&typeof pParameters.query==='object'?pParameters.query:{};var tmpSchema=Array.isArray(tmpQuery.schema)?tmpQuery.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}if(typeof tmpQuery.defaultIdentifier==='string'&&tmpQuery.defaultIdentifier){for(var j=0;j<tmpSchema.length;j++){if(tmpSchema[j].Column===tmpQuery.defaultIdentifier){return tmpQuery.defaultIdentifier;}}}return null;};/**
+	* Resolve the sort a capped read should actually run with.
+	*
+	* LIMIT/OFFSET over a sort that isn't a total order has no defined paging
+	* behavior: pages can overlap and drop rows.  InnoDB is stable enough in
+	* practice on simple scans that this rarely surfaces, but nothing in the
+	* engine promises it once the plan changes.  Appending the identity column
+	* makes the order total, so pages partition the result set.  A
+	* caller-supplied sort still leads; the identity column only breaks ties.
+	*
+	* @method: resolveStableSort
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {Array} The sort array to emit
+	*/var resolveStableSort=function(pParameters){var tmpSort=Array.isArray(pParameters.sort)?pParameters.sort.slice():[];// Only paged reads need a total order.  DISTINCT rejects an ORDER BY
+// term that isn't in the select list, and a query override owns its own
+// clause placement (it may be grouping), so neither can take one.
+if(!pParameters.cap||pParameters.distinct||pParameters.queryOverride||pParameters.disableStableSort){return tmpSort;}var tmpIdentityColumn=findIdentityColumn(pParameters);if(!tmpIdentityColumn){return tmpSort;}for(var i=0;i<tmpSort.length;i++){if(String(tmpSort[i].Column).split('.').pop()===tmpIdentityColumn){// Already a total order.
+return tmpSort;}}// A join can bring in a same-named identity column from another table,
+// which would make an unqualified ORDER BY ambiguous.
+var tmpColumn=tmpIdentityColumn;if(Array.isArray(pParameters.join)&&pParameters.join.length>0&&typeof pParameters.scope==='string'&&pParameters.scope.indexOf('.')<0&&pParameters.scope.indexOf('`')<0){tmpColumn=pParameters.scope+'.'+tmpIdentityColumn;}tmpSort.push({Column:tmpColumn,Direction:'Ascending'});return tmpSort;};/**
 	* Generate an ORDER BY clause from the sort array
 	*
 	* Each entry in the sort is an object like:
@@ -3175,7 +3270,7 @@ tmpWhere+=' '+tmpFilter[i].Column+' '+tmpFilter[i].Operator+' :'+tmpColumnParame
 	* @method: generateOrderBy
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String} Returns the field list clause
-	*/var generateOrderBy=function(pParameters){var tmpOrderBy=pParameters.sort;if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+tmpOrderBy[i].Column;if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
+	*/var generateOrderBy=function(pParameters){var tmpOrderBy=resolveStableSort(pParameters);if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+tmpOrderBy[i].Column;if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
 	* Generate the limit clause
 	*
 	* @method: generateLimit
@@ -3427,25 +3522,55 @@ var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[
 var tmpLastOperatorNoConnector=false;for(var i=0;i<tmpFilter.length;i++){if(tmpFilter[i].Connector!='NONE'&&tmpFilter[i].Operator!=')'&&tmpWhere!=' WHERE'&&tmpLastOperatorNoConnector==false){tmpWhere+=' '+tmpFilter[i].Connector;}tmpLastOperatorNoConnector=false;var tmpColumnParameter;if(tmpFilter[i].Operator==='('){tmpWhere+=' (';tmpLastOperatorNoConnector=true;}else if(tmpFilter[i].Operator===')'){tmpWhere+=' )';}else if(tmpFilter[i].Operator==='IN'||tmpFilter[i].Operator==="NOT IN"){// oracledb will not expand a single bound array into an IN list,
 // so expand the value list into discrete :name binds here.
 var tmpInValues=Array.isArray(tmpFilter[i].Value)?tmpFilter[i].Value:String(tmpFilter[i].Value).split(',');var tmpInPlaceholders=[];for(var v=0;v<tmpInValues.length;v++){var tmpInParameter=tmpFilter[i].Parameter+'_w'+i+'_'+v;tmpInPlaceholders.push(':'+tmpInParameter);pParameters.query.parameters[tmpInParameter]=tmpInValues[v];generateOracleParameterTypeEntry(pParameters,tmpInParameter,tmpFilter[i].Parameter);}tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator+' ('+tmpInPlaceholders.join(', ')+')';}else if(tmpFilter[i].Operator==='IS NULL'){tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator;}else if(tmpFilter[i].Operator==='IS NOT NULL'){tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator;}else{tmpColumnParameter=tmpFilter[i].Parameter+'_w'+i;var tmpSchemaForJson=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];var tmpJsonRef=resolveJsonColumnPath(tmpFilter[i].Column,tmpSchemaForJson);if(tmpJsonRef){tmpWhere+=' JSON_VALUE('+generateSafeFieldName(tmpJsonRef.column)+", '"+tmpJsonRef.path+"') "+tmpFilter[i].Operator+' :'+tmpColumnParameter;}else{tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator+' :'+tmpColumnParameter;}pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;generateOracleParameterTypeEntry(pParameters,tmpColumnParameter,tmpFilter[i].Parameter);}}return tmpWhere;};/**
-	* Find the table's AutoIdentity primary-key column from the schema, if any.
-	* Used as a deterministic default ORDER BY when the caller didn't set a
-	* sort, and as the RETURNING target for INSERT.
+	* Find the column whose value the database generates on INSERT.
+	*
+	* This is the RETURNING target, so it must stay strictly AutoIdentity — a
+	* primary key the caller supplies has nothing to return.  Ordering asks a
+	* different question; see findIdentityColumn.
 	*
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String|null} The column name, or null if none found
 	*/var findPrimaryKeyColumn=function(pParameters){var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}return null;};/**
+	* Find the column that gives a read a total order.
+	*
+	* An AutoIdentity schema entry is preferred because it is known to exist on
+	* the table.  `defaultIdentifier` is meadow's DefaultIdentifier, which is
+	* correct for primary keys that aren't auto-increment — but it falls back to
+	* 'ID'+Scope when nothing set it, so it is only trusted when the schema
+	* confirms the column is real.
+	*
+	* @method: findIdentityColumn
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {String|null} The column name, or null if none can be resolved
+	*/var findIdentityColumn=function(pParameters){var tmpQuery=pParameters.query&&typeof pParameters.query==='object'?pParameters.query:{};var tmpSchema=Array.isArray(tmpQuery.schema)?tmpQuery.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}if(typeof tmpQuery.defaultIdentifier==='string'&&tmpQuery.defaultIdentifier){for(var j=0;j<tmpSchema.length;j++){if(tmpSchema[j].Column===tmpQuery.defaultIdentifier){return tmpQuery.defaultIdentifier;}}}return null;};/**
+	* Resolve the sort a capped read should actually run with.
+	*
+	* Paging over a sort that isn't a total order has no defined behavior: pages
+	* can overlap and drop rows.  Appending the identity column makes the order
+	* total, so pages partition the result set.  A caller-supplied sort still
+	* leads; the identity column only breaks ties.
+	*
+	* @method: resolveStableSort
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {Array} The sort array to emit
+	*/var resolveStableSort=function(pParameters){var tmpSort=Array.isArray(pParameters.sort)?pParameters.sort.slice():[];// Only paged reads need a total order.  DISTINCT rejects an ORDER BY
+// term that isn't in the select list, and a query override owns its own
+// clause placement (it may be grouping), so neither can take one.
+if(!pParameters.cap||pParameters.distinct||pParameters.queryOverride||pParameters.disableStableSort){return tmpSort;}var tmpIdentityColumn=findIdentityColumn(pParameters);if(!tmpIdentityColumn){return tmpSort;}for(var i=0;i<tmpSort.length;i++){if(String(tmpSort[i].Column).split('.').pop()===tmpIdentityColumn){// Already a total order.
+return tmpSort;}}// A join can bring in a same-named identity column from another table,
+// which would make an unqualified ORDER BY ambiguous.
+var tmpColumn=tmpIdentityColumn;if(Array.isArray(pParameters.join)&&pParameters.join.length>0&&typeof pParameters.scope==='string'&&pParameters.scope.indexOf('.')<0&&pParameters.scope.indexOf('"')<0){tmpColumn=pParameters.scope+'.'+tmpIdentityColumn;}tmpSort.push({Column:tmpColumn,Direction:'Ascending'});return tmpSort;};/**
 	* Generate an ORDER BY clause from the sort array
 	*
-	* When no sort is specified but the query has a cap (pagination is active),
-	* inject a default ORDER BY on the primary key so paging is deterministic.
-	* Unlike MSSQL, Oracle permits OFFSET/FETCH and ROWNUM paging without an
-	* ORDER BY, so when no PK can be inferred we simply omit the clause rather
-	* than emitting an invalid "ORDER BY (SELECT 1)".
+	* A capped read has the identity column appended as a final tiebreaker so
+	* paging is deterministic.  Unlike MSSQL, Oracle permits OFFSET/FETCH and
+	* ROWNUM paging without an ORDER BY, so when no identity can be resolved we
+	* simply omit the clause rather than emitting an invalid "ORDER BY (SELECT 1)".
 	*
 	* @method: generateOrderBy
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String} Returns the order by clause
-	*/var generateOrderBy=function(pParameters){var tmpOrderBy=pParameters.sort;if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){if(pParameters.cap){var tmpPK=findPrimaryKeyColumn(pParameters);if(tmpPK){return' ORDER BY '+generateSafeFieldName(tmpPK);}}return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+generateSafeFieldName(tmpOrderBy[i].Column);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
+	*/var generateOrderBy=function(pParameters){var tmpOrderBy=resolveStableSort(pParameters);if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+generateSafeFieldName(tmpOrderBy[i].Column);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
 	* Generate the limit clause using the 12c+ OFFSET/FETCH syntax.
 	*
 	* When pParameters.legacyPagination is set the Read function wraps the
@@ -3573,6 +3698,38 @@ return'';}const qualifiedIDColumn=`${tmpTableName}.${idColumn.Column}`;return` $
 	* @return: {String} Returns the WHERE clause prefixed with WHERE, or an empty string if unnecessary
 	*/var generateWhere=function(pParameters){var tmpFilter=Array.isArray(pParameters.filter)?pParameters.filter:[];var tmpTableName=generateTableName(pParameters);if(!pParameters.query.disableDeleteTracking){// Check if there is a Deleted column on the Schema. If so, we add this to the filters automatically (if not already present)
 var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];for(var i=0;i<tmpSchema.length;i++){var tmpSchemaEntry=tmpSchema[i];if(tmpSchemaEntry.Type==='Deleted'){var tmpHasDeletedParameter=false;if(tmpFilter.length>0){for(var x=0;x<tmpFilter.length;x++){if(tmpFilter[x].Column===tmpSchemaEntry.Column){tmpHasDeletedParameter=true;break;}}}if(!tmpHasDeletedParameter){tmpFilter.push({Column:generateSafeFieldName(pParameters.scope+'.'+tmpSchemaEntry.Column),Operator:'=',Value:0,Connector:'AND',Parameter:'Deleted'});}break;}}}if(tmpFilter.length<1){return'';}var tmpWhere=' WHERE';var tmpLastOperatorNoConnector=false;for(var i=0;i<tmpFilter.length;i++){if(tmpFilter[i].Connector!='NONE'&&tmpFilter[i].Operator!=')'&&tmpWhere!=' WHERE'&&tmpLastOperatorNoConnector==false){tmpWhere+=' '+tmpFilter[i].Connector;}tmpLastOperatorNoConnector=false;var tmpColumnParameter;if(tmpFilter[i].Operator==='('){tmpWhere+=' (';tmpLastOperatorNoConnector=true;}else if(tmpFilter[i].Operator===')'){tmpWhere+=' )';}else if(tmpFilter[i].Operator==='IN'||tmpFilter[i].Operator==="NOT IN"){tmpColumnParameter=tmpFilter[i].Parameter+'_w'+i;tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator+' ( :'+tmpColumnParameter+' )';pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;}else if(tmpFilter[i].Operator==='IS NULL'){tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator;}else if(tmpFilter[i].Operator==='IS NOT NULL'){tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator;}else{tmpColumnParameter=tmpFilter[i].Parameter+'_w'+i;var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];var tmpJsonRef=resolveJsonColumnPath(tmpFilter[i].Column,tmpSchema);if(tmpJsonRef){var tmpPathParts=tmpJsonRef.path.replace('$.','').split('.');if(tmpPathParts.length===1){tmpWhere+=' "'+tmpJsonRef.column+'"'+"->>'"+tmpPathParts[0]+"' "+tmpFilter[i].Operator+' :'+tmpColumnParameter;}else{tmpWhere+=' "'+tmpJsonRef.column+'"'+"#>>'{"+tmpPathParts.join(',')+"}' "+tmpFilter[i].Operator+' :'+tmpColumnParameter;}}else{tmpWhere+=' '+generateSafeFieldName(tmpFilter[i].Column)+' '+tmpFilter[i].Operator+' :'+tmpColumnParameter;}pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;}}return tmpWhere;};/**
+	* Find the column that gives a read a total order.
+	*
+	* An AutoIdentity schema entry is preferred because it is known to exist on
+	* the table.  `defaultIdentifier` is meadow's DefaultIdentifier, which is
+	* correct for primary keys that aren't auto-increment — but it falls back to
+	* 'ID'+Scope when nothing set it, so it is only trusted when the schema
+	* confirms the column is real.
+	*
+	* @method: findIdentityColumn
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {String|null} The column name, or null if none can be resolved
+	*/var findIdentityColumn=function(pParameters){var tmpQuery=pParameters.query&&typeof pParameters.query==='object'?pParameters.query:{};var tmpSchema=Array.isArray(tmpQuery.schema)?tmpQuery.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}if(typeof tmpQuery.defaultIdentifier==='string'&&tmpQuery.defaultIdentifier){for(var j=0;j<tmpSchema.length;j++){if(tmpSchema[j].Column===tmpQuery.defaultIdentifier){return tmpQuery.defaultIdentifier;}}}return null;};/**
+	* Resolve the sort a capped read should actually run with.
+	*
+	* LIMIT/OFFSET over a sort that isn't a total order has no defined paging
+	* behavior: pages can overlap and drop rows.  PostgreSQL surfaces this
+	* readily because synchronize_seqscans lets each page's sequential scan
+	* start wherever the last one left off, on any relation over
+	* shared_buffers/4.  Appending the identity column makes the order total, so
+	* pages partition the result set.  A caller-supplied sort still leads; the
+	* identity column only breaks ties.
+	*
+	* @method: resolveStableSort
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {Array} The sort array to emit
+	*/var resolveStableSort=function(pParameters){var tmpSort=Array.isArray(pParameters.sort)?pParameters.sort.slice():[];// Only paged reads need a total order.  DISTINCT rejects an ORDER BY
+// term that isn't in the select list, and a query override owns its own
+// clause placement (it may be grouping), so neither can take one.
+if(!pParameters.cap||pParameters.distinct||pParameters.queryOverride||pParameters.disableStableSort){return tmpSort;}var tmpIdentityColumn=findIdentityColumn(pParameters);if(!tmpIdentityColumn){return tmpSort;}for(var i=0;i<tmpSort.length;i++){if(String(tmpSort[i].Column).split('.').pop()===tmpIdentityColumn){// Already a total order.
+return tmpSort;}}// A join can bring in a same-named identity column from another table,
+// which would make an unqualified ORDER BY ambiguous.
+var tmpColumn=tmpIdentityColumn;if(Array.isArray(pParameters.join)&&pParameters.join.length>0&&typeof pParameters.scope==='string'&&pParameters.scope.indexOf('.')<0&&pParameters.scope.indexOf('"')<0){tmpColumn=pParameters.scope+'.'+tmpIdentityColumn;}tmpSort.push({Column:tmpColumn,Direction:'Ascending'});return tmpSort;};/**
 	* Generate an ORDER BY clause from the sort array
 	*
 	* Each entry in the sort is an object like:
@@ -3581,7 +3738,7 @@ var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[
 	* @method: generateOrderBy
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String} Returns the field list clause
-	*/var generateOrderBy=function(pParameters){var tmpOrderBy=pParameters.sort;if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+generateSafeFieldName(tmpOrderBy[i].Column);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
+	*/var generateOrderBy=function(pParameters){var tmpOrderBy=resolveStableSort(pParameters);if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+generateSafeFieldName(tmpOrderBy[i].Column);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
 	* Generate the limit clause using PostgreSQL LIMIT/OFFSET syntax
 	*
 	* @method: generateLimit
@@ -3711,6 +3868,33 @@ tmpWhere+=' )';}else if(tmpFilter[i].Operator==='IN'||tmpFilter[i].Operator==='N
 var tmpFilterValue=tmpFilter[i].Value;if(Array.isArray(tmpFilterValue)){var tmpParameterNames=[];for(var j=0;j<tmpFilterValue.length;j++){var tmpElementParameter=tmpColumnParameter+'_'+j;tmpParameterNames.push(':'+tmpElementParameter);pParameters.query.parameters[tmpElementParameter]=tmpFilterValue[j];}tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Operator+' ( '+tmpParameterNames.join(', ')+' )';}else{// If for some reason the value is not an array, fall back to the old behavior
 tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Operator+' ( :'+tmpColumnParameter+' )';pParameters.query.parameters[tmpColumnParameter]=tmpFilterValue;}}else if(tmpFilter[i].Operator==='IS NOT NULL'){// IS NOT NULL is a special operator which doesn't require a value, or parameter
 tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Operator;}else{tmpColumnParameter=tmpFilter[i].Parameter+'_w'+i;var tmpSchema=Array.isArray(pParameters.query.schema)?pParameters.query.schema:[];var tmpJsonRef=resolveJsonColumnPath(tmpFilter[i].Column,tmpSchema);if(tmpJsonRef){tmpWhere+=' json_extract(`'+tmpJsonRef.column+"`, '"+tmpJsonRef.path+"') "+tmpFilter[i].Operator+' :'+tmpColumnParameter;}else{tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Operator+' :'+tmpColumnParameter;}pParameters.query.parameters[tmpColumnParameter]=tmpFilter[i].Value;}}return tmpWhere;};/**
+	* Find the column that gives a read a total order.
+	*
+	* An AutoIdentity schema entry is preferred because it is known to exist on
+	* the table.  `defaultIdentifier` is meadow's DefaultIdentifier, which is
+	* correct for primary keys that aren't auto-increment — but it falls back to
+	* 'ID'+Scope when nothing set it, so it is only trusted when the schema
+	* confirms the column is real.
+	*
+	* @method: findIdentityColumn
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {String|null} The column name, or null if none can be resolved
+	*/var findIdentityColumn=function(pParameters){var tmpQuery=pParameters.query&&typeof pParameters.query==='object'?pParameters.query:{};var tmpSchema=Array.isArray(tmpQuery.schema)?tmpQuery.schema:[];for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){return tmpSchema[i].Column;}}if(typeof tmpQuery.defaultIdentifier==='string'&&tmpQuery.defaultIdentifier){for(var j=0;j<tmpSchema.length;j++){if(tmpSchema[j].Column===tmpQuery.defaultIdentifier){return tmpQuery.defaultIdentifier;}}}return null;};/**
+	* Resolve the sort a capped read should actually run with.
+	*
+	* LIMIT/OFFSET over a sort that isn't a total order has no defined paging
+	* behavior: pages can overlap and drop rows.  Appending the identity column
+	* makes the order total, so pages partition the result set.  A
+	* caller-supplied sort still leads; the identity column only breaks ties.
+	*
+	* @method: resolveStableSort
+	* @param: {Object} pParameters SQL Query Parameters
+	* @return: {Array} The sort array to emit
+	*/var resolveStableSort=function(pParameters){var tmpSort=Array.isArray(pParameters.sort)?pParameters.sort.slice():[];// Only paged reads need a total order.  DISTINCT rejects an ORDER BY
+// term that isn't in the select list, and a query override owns its own
+// clause placement (it may be grouping), so neither can take one.
+if(!pParameters.cap||pParameters.distinct||pParameters.queryOverride||pParameters.disableStableSort){return tmpSort;}var tmpIdentityColumn=findIdentityColumn(pParameters);if(!tmpIdentityColumn){return tmpSort;}for(var i=0;i<tmpSort.length;i++){if(String(tmpSort[i].Column).split('.').pop()===tmpIdentityColumn){// Already a total order.
+return tmpSort;}}tmpSort.push({Column:tmpIdentityColumn,Direction:'Ascending'});return tmpSort;};/**
 	* Generate an ORDER BY clause from the sort array
 	*
 	* Each entry in the sort is an object like:
@@ -3719,7 +3903,7 @@ tmpWhere+=' '+escapeColumn(tmpFilter[i].Column,pParameters)+' '+tmpFilter[i].Ope
 	* @method: generateOrderBy
 	* @param: {Object} pParameters SQL Query Parameters
 	* @return: {String} Returns the field list clause
-	*/var generateOrderBy=function(pParameters){var tmpOrderBy=pParameters.sort;if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+escapeColumn(tmpOrderBy[i].Column,pParameters);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
+	*/var generateOrderBy=function(pParameters){var tmpOrderBy=resolveStableSort(pParameters);if(!Array.isArray(tmpOrderBy)||tmpOrderBy.length<1){return'';}var tmpOrderClause=' ORDER BY';for(var i=0;i<tmpOrderBy.length;i++){if(i>0){tmpOrderClause+=',';}tmpOrderClause+=' '+escapeColumn(tmpOrderBy[i].Column,pParameters);if(tmpOrderBy[i].Direction=='Descending'){tmpOrderClause+=' DESC';}}return tmpOrderClause;};/**
 	* Generate the limit clause
 	*
 	* @method: generateLimit
@@ -4332,7 +4516,7 @@ tmpFilterStanza.Field=tmpFilterTerms[i];break;case 2:// OPERATOR
 //console.log(i+' Operator:    '+tmpFilterTerms[i]);
 tmpFilterStanza.Operator=tmpFilterTerms[i];break;case 3:// VALUE
 //console.log(i+' Value:       '+tmpFilterTerms[i]);
-tmpFilterStanza.Value=tmpFilterTerms[i];break;}}addFilterStanzaToQuery(tmpFilterStanza,pQuery);return true;};module.exports=doParseFilter;},{}],215:[function(require,module,exports){module.exports={parse:require('./Meadow-Filter-Parse.js')};},{"./Meadow-Filter-Parse.js":214}],216:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+tmpFilterStanza.Value=tmpFilterTerms[i];break;}}addFilterStanzaToQuery(tmpFilterStanza,pQuery);return true;};module.exports=doParseFilter;},{}],215:[function(require,module,exports){module.exports={parse:require('./Meadow-Filter-Parse.js')};},{"./Meadow-Filter-Parse.js":214}],216:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4344,7 +4528,7 @@ tmpFilterStanza.Value=tmpFilterTerms[i];break;}}addFilterStanzaToQuery(tmpFilter
 */var loadFromPackageFile=function(pMeadow,pPackage){// Use the package loader to grab the configuration objects and clone a new Meadow.
 var tmpPackage=false;try{tmpPackage=require(pPackage);}catch(pError){pMeadow.fable.log.error('Error loading Fable package',{Package:pPackage});return false;}// Spool up a new Meadow object
 var tmpNewMeadow=pMeadow.new(pMeadow.fable);// Safely set the parameters
-if(typeof tmpPackage.Scope==='string'){tmpNewMeadow.setScope(tmpPackage.Scope);}if(typeof tmpPackage.Domain==='string'){tmpNewMeadow.setDomain(tmpPackage.Domain);}if(typeof tmpPackage.DefaultIdentifier==='string'){tmpNewMeadow.setDefaultIdentifier(tmpPackage.DefaultIdentifier);}if(Array.isArray(tmpPackage.Schema)){tmpNewMeadow.setSchema(tmpPackage.Schema);}if(typeof tmpPackage.JsonSchema==='object'){tmpNewMeadow.setJsonSchema(tmpPackage.JsonSchema);}if(typeof tmpPackage.DefaultObject==='object'){tmpNewMeadow.setDefault(tmpPackage.DefaultObject);}if(typeof tmpPackage.Authorization==='object'){tmpNewMeadow.setAuthorizer(tmpPackage.Authorization);}return tmpNewMeadow;};module.exports=loadFromPackageFile;},{}],217:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+if(typeof tmpPackage.Scope==='string'){tmpNewMeadow.setScope(tmpPackage.Scope);}if(typeof tmpPackage.Domain==='string'){tmpNewMeadow.setDomain(tmpPackage.Domain);}if(typeof tmpPackage.DefaultIdentifier==='string'){tmpNewMeadow.setDefaultIdentifier(tmpPackage.DefaultIdentifier);}if(Array.isArray(tmpPackage.Schema)){tmpNewMeadow.setSchema(tmpPackage.Schema);}if(typeof tmpPackage.JsonSchema==='object'){tmpNewMeadow.setJsonSchema(tmpPackage.JsonSchema);}if(typeof tmpPackage.DefaultObject==='object'){tmpNewMeadow.setDefault(tmpPackage.DefaultObject);}if(typeof tmpPackage.Authorization==='object'){tmpNewMeadow.setAuthorizer(tmpPackage.Authorization);}return tmpNewMeadow;};module.exports=loadFromPackageFile;},{}],217:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4356,7 +4540,7 @@ if(typeof tmpPackage.Scope==='string'){tmpNewMeadow.setScope(tmpPackage.Scope);}
 */var loadFromPackageObject=function(pMeadow,pPackage){// Use the package loader to grab the configuration objects and clone a new Meadow.
 var tmpPackage=typeof pPackage=='object'?pPackage:{};if(!pPackage.hasOwnProperty('Scope')){pMeadow.fable.log.error('Error loading Fable package -- scope not defined.',{Package:pPackage});}// Spool up a new Meadow object
 var tmpNewMeadow=pMeadow.new(pMeadow.fable);// Safely set the parameters
-if(typeof tmpPackage.Scope==='string'){tmpNewMeadow.setScope(tmpPackage.Scope);}if(typeof tmpPackage.Domain==='string'){tmpNewMeadow.setDomain(tmpPackage.Domain);}if(typeof tmpPackage.DefaultIdentifier==='string'){tmpNewMeadow.setDefaultIdentifier(tmpPackage.DefaultIdentifier);}if(Array.isArray(tmpPackage.Schema)){tmpNewMeadow.setSchema(tmpPackage.Schema);}if(typeof tmpPackage.JsonSchema==='object'){tmpNewMeadow.setJsonSchema(tmpPackage.JsonSchema);}if(typeof tmpPackage.DefaultObject==='object'){tmpNewMeadow.setDefault(tmpPackage.DefaultObject);}if(typeof tmpPackage.Authorization==='object'){tmpNewMeadow.setAuthorizer(tmpPackage.Authorization);}return tmpNewMeadow;};module.exports=loadFromPackageObject;},{}],218:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+if(typeof tmpPackage.Scope==='string'){tmpNewMeadow.setScope(tmpPackage.Scope);}if(typeof tmpPackage.Domain==='string'){tmpNewMeadow.setDomain(tmpPackage.Domain);}if(typeof tmpPackage.DefaultIdentifier==='string'){tmpNewMeadow.setDefaultIdentifier(tmpPackage.DefaultIdentifier);}if(Array.isArray(tmpPackage.Schema)){tmpNewMeadow.setSchema(tmpPackage.Schema);}if(typeof tmpPackage.JsonSchema==='object'){tmpNewMeadow.setJsonSchema(tmpPackage.JsonSchema);}if(typeof tmpPackage.DefaultObject==='object'){tmpNewMeadow.setDefault(tmpPackage.DefaultObject);}if(typeof tmpPackage.Authorization==='object'){tmpNewMeadow.setAuthorizer(tmpPackage.Authorization);}return tmpNewMeadow;};module.exports=loadFromPackageObject;},{}],218:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4392,7 +4576,7 @@ doSetQuery(pQueryTag,'');tmpCallBack(false);}else{_Meadow.fable.log.trace('Loade
 		* Check if a Custom Query exists
 		*
 		* @method doCheckQuery
-		*/function doCheckQuery(pQueryTag){return _Queries.hasOwnProperty(pQueryTag);}var tmpNewMeadowRawQuery={loadQuery:doLoadQuery,setQuery:doSetQuery,checkQuery:doCheckQuery,getQuery:doGetQuery,new:createNew};return tmpNewMeadowRawQuery;}return createNew();};module.exports=new MeadowRawQuery();},{"fs":81}],219:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+		*/function doCheckQuery(pQueryTag){return _Queries.hasOwnProperty(pQueryTag);}var tmpNewMeadowRawQuery={loadQuery:doLoadQuery,setQuery:doSetQuery,checkQuery:doCheckQuery,getQuery:doGetQuery,new:createNew};return tmpNewMeadowRawQuery;}return createNew();};module.exports=new MeadowRawQuery();},{"fs":81}],219:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4500,7 +4684,7 @@ if(!tmpValidation.Valid){tmpValidation.Errors=_Validate.errors;}return tmpValida
 		 *
 		 * @property defaultObject
 		 * @type object
-		 */Object.defineProperty(tmpNewMeadowSchemaObject,'authorizer',{get:function(){return _Authorizers;},enumerable:true});return tmpNewMeadowSchemaObject;}return createNew();};module.exports=new MeadowSchema();},{"is-my-json-valid":199}],220:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+		 */Object.defineProperty(tmpNewMeadowSchemaObject,'authorizer',{get:function(){return _Authorizers;},enumerable:true});return tmpNewMeadowSchemaObject;}return createNew();};module.exports=new MeadowSchema();},{"is-my-json-valid":199}],220:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4656,7 +4840,10 @@ new:createNew};/**
 		 * @property query
 		 * @type object
 		 */Object.defineProperty(tmpNewMeadowObject,'query',{get:function(){var tmpQuery=_Query.clone();// Set the default schema
-tmpQuery.query.schema=_Schema.schema;return tmpQuery;},enumerable:true});/**
+tmpQuery.query.schema=_Schema.schema;// Dialects use this to give a capped read a total order; it is
+// correct even where the primary key isn't auto-increment (and
+// therefore isn't typed AutoIdentity in the schema).
+tmpQuery.query.defaultIdentifier=_DefaultIdentifier;return tmpQuery;},enumerable:true});/**
 		 * Raw Queries
 		 *
 		 * @property rawQueries
@@ -4673,7 +4860,7 @@ tmpQuery.query.schema=_Schema.schema;return tmpQuery;},enumerable:true});/**
 		 * @type object
 		 */Object.defineProperty(tmpNewMeadowObject,'providerName',{get:function(){return _ProviderName;},enumerable:true});// addServices removed in fable 2.x
 if(typeof _Fable.addServices==='function'){_Fable.addServices(tmpNewMeadowObject);}else{// bring over addServices implementation from Fable 1.x for backward compatibility
-Object.defineProperty(tmpNewMeadowObject,'fable',{get:function(){return _Fable;},enumerable:false});Object.defineProperty(tmpNewMeadowObject,'settings',{get:function(){return _Fable.settings;},enumerable:false});Object.defineProperty(tmpNewMeadowObject,'log',{get:function(){return _Fable.log;},enumerable:false});}return tmpNewMeadowObject;}return createNew();};module.exports=new Meadow();},{"./Meadow-PackageFileLoader.js":216,"./Meadow-PackageObjectLoader.js":217,"./Meadow-RawQuery.js":218,"./Meadow-Schema.js":219,"./behaviors/Meadow-Count.js":222,"./behaviors/Meadow-Create.js":223,"./behaviors/Meadow-Delete.js":224,"./behaviors/Meadow-Read.js":225,"./behaviors/Meadow-Reads.js":226,"./behaviors/Meadow-Undelete.js":227,"./behaviors/Meadow-Update.js":228,"./providers/Meadow-Provider-ALASQL.js":229,"./providers/Meadow-Provider-DGraph.js":230,"./providers/Meadow-Provider-MSSQL.js":231,"./providers/Meadow-Provider-MeadowEndpoints.js":232,"./providers/Meadow-Provider-MongoDB.js":233,"./providers/Meadow-Provider-MySQL.js":234,"./providers/Meadow-Provider-None.js":235,"./providers/Meadow-Provider-Oracle.js":236,"./providers/Meadow-Provider-PostgreSQL.js":237,"./providers/Meadow-Provider-RetoldDataBeacon.js":238,"./providers/Meadow-Provider-RocksDB.js":239,"./providers/Meadow-Provider-SQLite.js":240,"./providers/Meadow-Provider-Solr.js":241,"foxhound":146}],221:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+Object.defineProperty(tmpNewMeadowObject,'fable',{get:function(){return _Fable;},enumerable:false});Object.defineProperty(tmpNewMeadowObject,'settings',{get:function(){return _Fable.settings;},enumerable:false});Object.defineProperty(tmpNewMeadowObject,'log',{get:function(){return _Fable.log;},enumerable:false});}return tmpNewMeadowObject;}return createNew();};module.exports=new Meadow();},{"./Meadow-PackageFileLoader.js":216,"./Meadow-PackageObjectLoader.js":217,"./Meadow-RawQuery.js":218,"./Meadow-Schema.js":219,"./behaviors/Meadow-Count.js":222,"./behaviors/Meadow-Create.js":223,"./behaviors/Meadow-Delete.js":224,"./behaviors/Meadow-Read.js":225,"./behaviors/Meadow-Reads.js":226,"./behaviors/Meadow-Undelete.js":227,"./behaviors/Meadow-Update.js":228,"./providers/Meadow-Provider-ALASQL.js":229,"./providers/Meadow-Provider-DGraph.js":230,"./providers/Meadow-Provider-MSSQL.js":231,"./providers/Meadow-Provider-MeadowEndpoints.js":232,"./providers/Meadow-Provider-MongoDB.js":233,"./providers/Meadow-Provider-MySQL.js":234,"./providers/Meadow-Provider-None.js":235,"./providers/Meadow-Provider-Oracle.js":236,"./providers/Meadow-Provider-PostgreSQL.js":237,"./providers/Meadow-Provider-RetoldDataBeacon.js":238,"./providers/Meadow-Provider-RocksDB.js":239,"./providers/Meadow-Provider-SQLite.js":240,"./providers/Meadow-Provider-Solr.js":241,"foxhound":146}],221:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4739,7 +4926,7 @@ tmpUpdateQuery.query.IDUser=pMeadow.userIdentifier;pMeadow.provider.Update(tmpUp
 */var renameSoftDeletedConflicts=function(pMeadow,pNewRecord,fCallback){var tmpConstraints=collectUniqueConstraints(pMeadow.schema);if(tmpConstraints.length<1){return fCallback();}var tmpDeletedColumn=findDeletedColumn(pMeadow.schema);// If there's no Deleted column in the schema, soft-delete tracking
 // isn't a concept here — nothing can be soft-deleted, so nothing to
 // rename. Bail out early.
-if(!tmpDeletedColumn){return fCallback();}var tmpProcessNext=function(pIndex){if(pIndex>=tmpConstraints.length){return fCallback();}processConstraint(pMeadow,pNewRecord,tmpConstraints[pIndex],tmpDeletedColumn,function(pError){if(pError){return fCallback(pError);}return tmpProcessNext(pIndex+1);});};tmpProcessNext(0);};module.exports=renameSoftDeletedConflicts;module.exports.buildRenamedValue=buildRenamedValue;module.exports.collectUniqueConstraints=collectUniqueConstraints;module.exports.findDeletedColumn=findDeletedColumn;module.exports.COLLISION_RENAME_PREFIX=COLLISION_RENAME_PREFIX;module.exports.COLLISION_RENAME_HASH_LENGTH=COLLISION_RENAME_HASH_LENGTH;},{"crypto":103}],222:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+if(!tmpDeletedColumn){return fCallback();}var tmpProcessNext=function(pIndex){if(pIndex>=tmpConstraints.length){return fCallback();}processConstraint(pMeadow,pNewRecord,tmpConstraints[pIndex],tmpDeletedColumn,function(pError){if(pError){return fCallback(pError);}return tmpProcessNext(pIndex+1);});};tmpProcessNext(0);};module.exports=renameSoftDeletedConflicts;module.exports.buildRenamedValue=buildRenamedValue;module.exports.collectUniqueConstraints=collectUniqueConstraints;module.exports.findDeletedColumn=findDeletedColumn;module.exports.COLLISION_RENAME_PREFIX=COLLISION_RENAME_PREFIX;module.exports.COLLISION_RENAME_HASH_LENGTH=COLLISION_RENAME_HASH_LENGTH;},{"crypto":103}],222:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4753,7 +4940,7 @@ libAsyncWaterfall([// Step 1: Get the record countfrom the data source
 function(fStageComplete){if(pMeadow.rawQueries.checkQuery('Count')){pQuery.parameters.queryOverride=pMeadow.rawQueries.getQuery('Count');}pMeadow.provider.Count(pQuery,function(){fStageComplete(pQuery.result.error,pQuery);});},// Step 2: Validate the resulting value
 function(pQuery,fStageComplete){// Check if query time exceeded threshold in settings. Log if slow.
 var tmpProfileTime=new Date().getTime()-tmpProfileStart.getTime();if(tmpProfileTime>(pMeadow.fable.settings['QueryThresholdWarnTime']||200)){pMeadow.logSlowQuery(tmpProfileTime,pQuery);}if(typeof pQuery.parameters.result.value!=='number'){// The return value is a number.. something is wrong.
-return fStageComplete('Count did not return valid results.',pQuery,false);}fStageComplete(pQuery.result.error,pQuery,pQuery.result.value);}],function(pError,pQuery,pCount){if(pError){pMeadow.fable.log.warn('Error during the count waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pCount);});return pMeadow;};module.exports=meadowBehaviorCount;},{"async/waterfall":33}],223:[function(require,module,exports){(function(setImmediate){(function(){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+return fStageComplete('Count did not return valid results.',pQuery,false);}fStageComplete(pQuery.result.error,pQuery,pQuery.result.value);}],function(pError,pQuery,pCount){if(pError){pMeadow.fable.log.warn('Error during the count waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pCount);});return pMeadow;};module.exports=meadowBehaviorCount;},{"async/waterfall":33}],223:[function(require,module,exports){(function(setImmediate){(function(){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4793,7 +4980,7 @@ if(pQuery.parameters.result.value===false){return fStageComplete('Creation faile
 function(pQuery,pIDRecord,fStageComplete){var tmpQueryRead=pQuery.clone().addFilter(pMeadow.defaultIdentifier,pIDRecord).setDisableDeleteTracking(pQuery.parameters.query.disableDeleteTracking);//if delete tracking is disabled, we need to disable it on this Read operation
 if(pMeadow.rawQueries.checkQuery('Read')){tmpQueryRead.parameters.queryOverride=pMeadow.rawQueries.getQuery('Read');}pMeadow.provider.Read(tmpQueryRead,function(){fStageComplete(tmpQueryRead.result.error,pQuery,tmpQueryRead);});},// Step 4: Marshal the record into a POJO
 function(pQuery,pQueryRead,fStageComplete){// Ensure there is not at least one record returned
-if(pQueryRead.parameters.result.value.length<1){return fStageComplete('No record found after create.',pQuery,pQueryRead,false);}var tmpRecord=pMeadow.marshalRecordFromSourceToObject(pQueryRead.result.value[0]);fStageComplete(pQuery.result.error,pQuery,pQueryRead,tmpRecord);}],function(pError,pQuery,pQueryRead,pRecord){if(pError){pMeadow.fable.log.warn('Error during the create waterfall',{Error:pError,Message:pError.message,Query:pQuery.query,Stack:pError.stack});}fCallBack(pError,pQuery,pQueryRead,pRecord);});return pMeadow;};module.exports=meadowBehaviorCreate;}).call(this);}).call(this,require("timers").setImmediate);},{"./Meadow-CollisionRename.js":221,"async/waterfall":33,"timers":352}],224:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+if(pQueryRead.parameters.result.value.length<1){return fStageComplete('No record found after create.',pQuery,pQueryRead,false);}var tmpRecord=pMeadow.marshalRecordFromSourceToObject(pQueryRead.result.value[0]);fStageComplete(pQuery.result.error,pQuery,pQueryRead,tmpRecord);}],function(pError,pQuery,pQueryRead,pRecord){if(pError){pMeadow.fable.log.warn('Error during the create waterfall',{Error:pError,Message:pError.message,Query:pQuery.query,Stack:pError.stack});}fCallBack(pError,pQuery,pQueryRead,pRecord);});return pMeadow;};module.exports=meadowBehaviorCreate;}).call(this);}).call(this,require("timers").setImmediate);},{"./Meadow-CollisionRename.js":221,"async/waterfall":33,"timers":352}],224:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4804,7 +4991,7 @@ if(pQueryRead.parameters.result.value.length<1){return fStageComplete('No record
 */var meadowBehaviorDelete=function(pMeadow,pQuery,fCallBack){// TODO: Check if this recordset has implicit delete tracking, branch in this module.
 // Delete the record(s) from the source
 libAsyncWaterfall([// Step 1: Delete the record
-function(fStageComplete){if(pMeadow.rawQueries.checkQuery('Delete')){pQuery.parameters.queryOverride=pMeadow.rawQueries.getQuery('Delete');}pMeadow.provider.Delete(pQuery,function(){fStageComplete(pQuery.result.error,pQuery,pQuery.result.value);});}],function(pError,pQuery,pRecord){if(pError){pMeadow.fable.log.warn('Error during the delete waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecord);});return pMeadow;};module.exports=meadowBehaviorDelete;},{"async/waterfall":33}],225:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+function(fStageComplete){if(pMeadow.rawQueries.checkQuery('Delete')){pQuery.parameters.queryOverride=pMeadow.rawQueries.getQuery('Delete');}pMeadow.provider.Delete(pQuery,function(){fStageComplete(pQuery.result.error,pQuery,pQuery.result.value);});}],function(pError,pQuery,pRecord){if(pError){pMeadow.fable.log.warn('Error during the delete waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecord);});return pMeadow;};module.exports=meadowBehaviorDelete;},{"async/waterfall":33}],225:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4817,7 +5004,7 @@ libAsyncWaterfall([// Step 1: Get the record from the data source
 function(fStageComplete){// If there is a Read override query, use it!
 if(pMeadow.rawQueries.checkQuery('Read')){pQuery.parameters.queryOverride=pMeadow.rawQueries.getQuery('Read');}pMeadow.provider.Read(pQuery,function(){fStageComplete(pQuery.result.error,pQuery);});},// Step 2: Marshal the record into a POJO
 function(pQuery,fStageComplete){// Check that a record was returned
-if(pQuery.parameters.result.value.length<1){return fStageComplete(undefined,pQuery,false);}var tmpRecord=pMeadow.marshalRecordFromSourceToObject(pQuery.result.value[0]);fStageComplete(pQuery.result.error,pQuery,tmpRecord);}],(pError,pQuery,pRecord)=>{if(pError){pMeadow.fable.log.warn('Error during the read waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecord);});return pMeadow;};module.exports=meadowBehaviorRead;},{"async/waterfall":33}],226:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+if(pQuery.parameters.result.value.length<1){return fStageComplete(undefined,pQuery,false);}var tmpRecord=pMeadow.marshalRecordFromSourceToObject(pQuery.result.value[0]);fStageComplete(pQuery.result.error,pQuery,tmpRecord);}],(pError,pQuery,pRecord)=>{if(pError){pMeadow.fable.log.warn('Error during the read waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecord);});return pMeadow;};module.exports=meadowBehaviorRead;},{"async/waterfall":33}],226:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4831,7 +5018,7 @@ libAsyncWaterfall([// Step 1: Get the record(s) from the data source
 function(fStageComplete){if(pMeadow.rawQueries.checkQuery('Reads')){pQuery.parameters.queryOverride=pMeadow.rawQueries.getQuery('Reads');}pMeadow.provider.Read(pQuery,function(){fStageComplete(pQuery.result.error,pQuery);});},// Step 2: Marshal all the records into an array of POJOs
 function(pQuery,fStageComplete){// Check if query time exceeded threshold in settings. Log if slow.
 var tmpProfileTime=new Date().getTime()-tmpProfileStart.getTime();if(tmpProfileTime>(pMeadow.fable.settings['QueryThresholdWarnTime']||200)){pMeadow.logSlowQuery(tmpProfileTime,pQuery);}var tmpRecords=[];libAsyncEach(pQuery.parameters.result.value,function(pRow,pQueueCallback){tmpRecords.push(pMeadow.marshalRecordFromSourceToObject(pRow));pQueueCallback();},function(){// After we've pushed every record into the array in order, complete the waterfall
-fStageComplete(pQuery.result.error,pQuery,tmpRecords);});}],function(pError,pQuery,pRecords){if(pError){pMeadow.fable.log.warn('Error during the read multiple waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecords);});return pMeadow;};module.exports=meadowBehaviorReads;},{"async/eachSeries":19,"async/waterfall":33}],227:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+fStageComplete(pQuery.result.error,pQuery,tmpRecords);});}],function(pError,pQuery,pRecords){if(pError){pMeadow.fable.log.warn('Error during the read multiple waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecords);});return pMeadow;};module.exports=meadowBehaviorReads;},{"async/eachSeries":19,"async/waterfall":33}],227:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4842,7 +5029,7 @@ fStageComplete(pQuery.result.error,pQuery,tmpRecords);});}],function(pError,pQue
 */var meadowBehaviorUndelete=function(pMeadow,pQuery,fCallBack){// TODO: Check if this recordset has implicit delete tracking, branch in this module?
 // Undelete the record(s) if they were deleted with a bit
 libAsyncWaterfall([// Step 1: Undelete the record
-function(fStageComplete){if(pMeadow.rawQueries.checkQuery('Undelete')){pQuery.parameters.queryOverride=pMeadow.rawQueries.getQuery('Undelete');}pMeadow.provider.Undelete(pQuery,function(){fStageComplete(pQuery.result.error,pQuery,pQuery.result.value);});}],function(pError,pQuery,pRecord){if(pError){pMeadow.fable.log.warn('Error during the undelete waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecord);});return pMeadow;};module.exports=meadowBehaviorUndelete;},{"async/waterfall":33}],228:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+function(fStageComplete){if(pMeadow.rawQueries.checkQuery('Undelete')){pQuery.parameters.queryOverride=pMeadow.rawQueries.getQuery('Undelete');}pMeadow.provider.Undelete(pQuery,function(){fStageComplete(pQuery.result.error,pQuery,pQuery.result.value);});}],function(pError,pQuery,pRecord){if(pError){pMeadow.fable.log.warn('Error during the undelete waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pRecord);});return pMeadow;};module.exports=meadowBehaviorUndelete;},{"async/waterfall":33}],228:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4870,7 +5057,7 @@ function(pQuery,fStageComplete){// We can clone the query, since it has the crit
 var tmpQueryRead=pQuery.clone();// Make sure to load the record with the custom query if necessary.
 if(pMeadow.rawQueries.checkQuery('Read')){tmpQueryRead.parameters.queryOverride=pMeadow.rawQueries.getQuery('Read');}pMeadow.provider.Read(tmpQueryRead,function(){fStageComplete(tmpQueryRead.result.error,pQuery,tmpQueryRead);});},// Step 4: Marshal the record into a POJO
 function(pQuery,pQueryRead,fStageComplete){if(pQueryRead.result.value.length===0){//No record found to update
-return fStageComplete('No record found to update!',pQueryRead.result,false);}var tmpRecord=pMeadow.marshalRecordFromSourceToObject(pQueryRead.result.value[0]);fStageComplete(pQuery.result.error,pQuery,pQueryRead,tmpRecord);}],function(pError,pQuery,pQueryRead,pRecord){if(pError){pMeadow.fable.log.warn('Error during Update waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pQueryRead,pRecord);});return pMeadow;};module.exports=meadowBehaviorUpdate;},{"async/waterfall":33}],229:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+return fStageComplete('No record found to update!',pQueryRead.result,false);}var tmpRecord=pMeadow.marshalRecordFromSourceToObject(pQueryRead.result.value[0]);fStageComplete(pQuery.result.error,pQuery,pQueryRead,tmpRecord);}],function(pError,pQuery,pQueryRead,pRecord){if(pError){pMeadow.fable.log.warn('Error during Update waterfall',{Error:pError,Message:pError.message,Query:pQuery.query});}fCallBack(pError,pQuery,pQueryRead,pRecord);});return pMeadow;};module.exports=meadowBehaviorUpdate;},{"async/waterfall":33}],229:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4942,7 +5129,7 @@ if(pParameters.Import){if(typeof fCallback!=='function'){_Fable.log.error('Meado
 // fire-and-forget loop swallowed them, preserve that
 // shape so partial imports still return a usable meadow.
 return fNext();});},function(){return fCallback(null,tmpMeadow);});return tmpMeadow;}// Just assign the object
-tmpMeadow.provider.bindObject(pParameters.Data);if(typeof fCallback==='function'){fCallback(null,tmpMeadow);}return tmpMeadow;};var tmpNewProvider={setSchema:setSchema,marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,constructFromObject:constructFromObject,bindObject:bindObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{"async/eachSeries":19}],230:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+tmpMeadow.provider.bindObject(pParameters.Data);if(typeof fCallback==='function'){fCallback(null,tmpMeadow);}return tmpMeadow;};var tmpNewProvider={setSchema:setSchema,marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,constructFromObject:constructFromObject,bindObject:bindObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{"async/eachSeries":19}],230:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -4978,7 +5165,7 @@ var tmpUpdateDoc=replaceSentinels(JSON.parse(JSON.stringify(tmpOp.update)));var 
 var tmpReadTxn=tmpClient.newTxn({readOnly:true});tmpReadTxn.query(tmpOp.queryForUIDs).then(function(pResponse){var tmpData=pResponse.data||{};var tmpNodes=tmpData[tmpOp.queryName]||[];if(tmpNodes.length===0){tmpResult.error=null;tmpResult.value=0;tmpResult.executed=true;return fCallback();}if(tmpOp.operation==='upsert'){// Soft delete: update matching nodes with delete setters
 var tmpUpdateDoc=replaceSentinels(JSON.parse(JSON.stringify(tmpOp.update)));var tmpMutations=[];for(var i=0;i<tmpNodes.length;i++){var tmpSetDoc=JSON.parse(JSON.stringify(tmpUpdateDoc));tmpSetDoc.uid=tmpNodes[i].uid;tmpMutations.push(tmpSetDoc);}var tmpWriteTxn=tmpClient.newTxn();tmpWriteTxn.mutate({setJson:tmpMutations}).then(function(){return tmpWriteTxn.commit();}).then(function(){tmpResult.error=null;tmpResult.value=tmpNodes.length;tmpResult.executed=true;return fCallback();}).catch(function(pError){try{tmpWriteTxn.discard();}catch(e){}tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}else{// Hard delete: delete the nodes
 var tmpDeleteDocs=[];for(var j=0;j<tmpNodes.length;j++){tmpDeleteDocs.push({uid:tmpNodes[j].uid});}var tmpWriteTxn=tmpClient.newTxn();tmpWriteTxn.mutate({deleteJson:tmpDeleteDocs}).then(function(){return tmpWriteTxn.commit();}).then(function(){tmpResult.error=null;tmpResult.value=tmpNodes.length;tmpResult.executed=true;return fCallback();}).catch(function(pError){try{tmpWriteTxn.discard();}catch(e){}tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var Undelete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('DGraph').buildUndeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpClient=getClient();if(!tmpClient){tmpResult.error=new Error('No DGraph connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.dgraphOperation;if(!tmpOp||tmpOp.operation==='noop'){tmpResult.error=null;tmpResult.value=0;tmpResult.executed=true;return fCallback();}// Query for matching UIDs
-var tmpReadTxn=tmpClient.newTxn({readOnly:true});tmpReadTxn.query(tmpOp.queryForUIDs).then(function(pResponse){var tmpData=pResponse.data||{};var tmpNodes=tmpData[tmpOp.queryName]||[];if(tmpNodes.length===0){tmpResult.error=null;tmpResult.value=0;tmpResult.executed=true;return fCallback();}var tmpUpdateDoc=replaceSentinels(JSON.parse(JSON.stringify(tmpOp.update)));var tmpMutations=[];for(var i=0;i<tmpNodes.length;i++){var tmpSetDoc=JSON.parse(JSON.stringify(tmpUpdateDoc));tmpSetDoc.uid=tmpNodes[i].uid;tmpMutations.push(tmpSetDoc);}var tmpWriteTxn=tmpClient.newTxn();tmpWriteTxn.mutate({setJson:tmpMutations}).then(function(){return tmpWriteTxn.commit();}).then(function(){tmpResult.error=null;tmpResult.value=tmpNodes.length;tmpResult.executed=true;return fCallback();}).catch(function(pError){try{tmpWriteTxn.discard();}catch(e){}tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('DGraph').buildCountQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpClient=getClient();if(!tmpClient){tmpResult.error=new Error('No DGraph connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.dgraphOperation;var tmpTxn=tmpClient.newTxn({readOnly:true});tmpTxn.query(tmpOp.query).then(function(pResponse){var tmpData=pResponse.data||{};var tmpResults=tmpData[tmpOp.queryName]||[];tmpResult.error=null;if(tmpResults.length>0&&typeof tmpResults[0].total!=='undefined'){tmpResult.value=tmpResults[0].total;}else{tmpResult.value=0;}tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],231:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+var tmpReadTxn=tmpClient.newTxn({readOnly:true});tmpReadTxn.query(tmpOp.queryForUIDs).then(function(pResponse){var tmpData=pResponse.data||{};var tmpNodes=tmpData[tmpOp.queryName]||[];if(tmpNodes.length===0){tmpResult.error=null;tmpResult.value=0;tmpResult.executed=true;return fCallback();}var tmpUpdateDoc=replaceSentinels(JSON.parse(JSON.stringify(tmpOp.update)));var tmpMutations=[];for(var i=0;i<tmpNodes.length;i++){var tmpSetDoc=JSON.parse(JSON.stringify(tmpUpdateDoc));tmpSetDoc.uid=tmpNodes[i].uid;tmpMutations.push(tmpSetDoc);}var tmpWriteTxn=tmpClient.newTxn();tmpWriteTxn.mutate({setJson:tmpMutations}).then(function(){return tmpWriteTxn.commit();}).then(function(){tmpResult.error=null;tmpResult.value=tmpNodes.length;tmpResult.executed=true;return fCallback();}).catch(function(pError){try{tmpWriteTxn.discard();}catch(e){}tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('DGraph').buildCountQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpClient=getClient();if(!tmpClient){tmpResult.error=new Error('No DGraph connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.dgraphOperation;var tmpTxn=tmpClient.newTxn({readOnly:true});tmpTxn.query(tmpOp.query).then(function(pResponse){var tmpData=pResponse.data||{};var tmpResults=tmpData[tmpOp.queryName]||[];tmpResult.error=null;if(tmpResults.length>0&&typeof tmpResults[0].total!=='undefined'){tmpResult.value=tmpResults[0].total;}else{tmpResult.value=0;}tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],231:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5019,7 +5206,7 @@ tmpResult.error=pPreparedExecutionError;tmpResult.value=false;try{tmpResult.valu
 tmpPreparedStatement.unprepare(pPreparedStatementUnprepareError=>{if(pPreparedStatementUnprepareError){_Fable.log.error(`UNDELETE Error unpreparing prepared statement: ${pPreparedStatementUnprepareError}`,pPreparedStatementUnprepareError);}//_Fable.log.info(`Prepared statement returned...`, pPreparedResult);
 tmpResult.error=pPreparedExecutionError;tmpResult.value=false;try{tmpResult.value=pPreparedResult.rowsAffected[0];}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during undelete query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});});});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MSSQL').buildCountQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}let tmpPreparedStatement=getPreparedStatementFromQuery(pQuery);tmpPreparedStatement.prepare(pQuery.query.body,pPrepareError=>{if(pPrepareError){_Fable.log.error(`COUNT Error preparing prepared statement: ${pPrepareError}`,pPrepareError);tmpResult.error=pPrepareError;tmpResult.executed=true;return fCallback();}tmpPreparedStatement.execute(pQuery.query.parameters,(pPreparedExecutionError,pPreparedResult)=>{// release the connection after queries are executed
 tmpPreparedStatement.unprepare(pPreparedStatementUnprepareError=>{if(pPreparedStatementUnprepareError){_Fable.log.error(`COUNT Error unpreparing prepared statement: ${pPreparedStatementUnprepareError}`,pPreparedStatementUnprepareError);}//_Fable.log.info(`Prepared statement returned...`, pPreparedResult);
-tmpResult.error=pPreparedExecutionError;tmpResult.value=false;try{tmpResult.value=pPreparedResult.recordset[0].Row_Count;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});});});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],232:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+tmpResult.error=pPreparedExecutionError;tmpResult.value=false;try{tmpResult.value=pPreparedResult.recordset[0].Row_Count;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});});});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],232:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5059,7 +5246,7 @@ if(!pQuery.query.records.length>0){tmpResult.error='No records passed for proxyi
 // an object). The subsequent Read step uses the existing
 // filters to re-read the updated record.
 if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.debug(`==> PUT completed data size ${tmpData.length}b received`,tmpResult);}return fCallback();});});};var Delete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect(_Dialect).buildDeleteQuery();let tmpRequestOptions=buildRequestOptions(pQuery);libSimpleGet.delete(tmpRequestOptions,(pError,pResponse)=>{tmpResult.error=pError;tmpResult.executed=true;if(pQuery.logLevel>0||_GlobalLogLevel>0)_Fable.log.debug(`--> DEL request connected`);if(pError){return fCallback(tmpResult);}let tmpData='';pResponse.on('data',pChunk=>{if(pQuery.logLevel>0||_GlobalLogLevel>0)_Fable.log.debug(`--> DEL data chunk size ${pChunk.length}b received`);tmpData+=pChunk;});pResponse.on('end',()=>{if(tmpData){try{tmpResult.value=JSON.parse(tmpData);}catch(pParseError){tmpResult.error=new Error(`Failed to parse Delete response as JSON: ${pParseError.message}`);return fCallback();}}if(tmpResult.value&&tmpResult.value.hasOwnProperty('Count')){tmpResult.value=tmpResult.value.Count;}if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.debug(`==> DEL completed data size ${tmpData.length}b received`,tmpResult);}fCallback();});});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect(_Dialect).buildCountQuery();let tmpRequestOptions=buildRequestOptions(pQuery);libSimpleGet.get(tmpRequestOptions,(pError,pResponse)=>{tmpResult.error=pError;tmpResult.executed=true;if(pQuery.logLevel>0||_GlobalLogLevel>0)_Fable.log.debug(`--> GET request connected`);if(pError){return fCallback(tmpResult);}let tmpData='';pResponse.on('data',pChunk=>{if(pQuery.logLevel>0||_GlobalLogLevel>0)_Fable.log.debug(`--> GET data chunk size ${pChunk.length}b received`);tmpData+=pChunk;});pResponse.on('end',()=>{if(tmpData){try{tmpResult.value=JSON.parse(tmpData);}catch(pParseError){tmpResult.error=new Error(`Failed to parse Count response as JSON: ${pParseError.message}`);return fCallback();}}try{tmpResult.value=tmpResult.value.Count;}catch(pErrorGettingRowcount){// This is an error state...
-tmpResult.value=-1;_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.debug(`==> GET completed data size ${tmpData.length}b received`,tmpResult);}fCallback();});});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{"simple-get":314}],233:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+tmpResult.value=-1;_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.debug(`==> GET completed data size ${tmpData.length}b received`,tmpResult);}fCallback();});});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{"simple-get":314}],233:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5086,7 +5273,7 @@ var tmpAutoIncrementColumn=false;for(var tmpKey in tmpDocument){if(tmpDocument[t
 getNextSequence(tmpDB,tmpOp.collection,tmpAutoIncrementColumn,function(pSeqError,pSeqValue){if(pSeqError){tmpResult.error=pSeqError;tmpResult.value=false;tmpResult.executed=true;return fCallback();}tmpDocument[tmpAutoIncrementColumn]=pSeqValue;tmpCollection.insertOne(tmpDocument).then(function(pInsertResult){tmpResult.error=null;tmpResult.value=pSeqValue;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});});}else{tmpCollection.insertOne(tmpDocument).then(function(pInsertResult){tmpResult.error=null;tmpResult.value=pInsertResult.insertedId;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}};var Read=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MongoDB').buildReadQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpDB=getDB();if(!tmpDB){tmpResult.error=new Error('No MongoDB connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.mongoOperation;var tmpCollection=tmpDB.collection(tmpOp.collection);var tmpOptions={};if(tmpOp.projection&&Object.keys(tmpOp.projection).length>0){tmpOptions.projection=tmpOp.projection;}if(tmpOp.sort&&Object.keys(tmpOp.sort).length>0){tmpOptions.sort=tmpOp.sort;}if(tmpOp.skip){tmpOptions.skip=tmpOp.skip;}if(tmpOp.limit){tmpOptions.limit=tmpOp.limit;}tmpCollection.find(tmpOp.filter,tmpOptions).toArray().then(function(pDocs){tmpResult.error=null;tmpResult.value=pDocs;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var Update=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MongoDB').buildUpdateQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpDB=getDB();if(!tmpDB){tmpResult.error=new Error('No MongoDB connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.mongoOperation;if(!tmpOp){tmpResult.error=new Error('No MongoDB operation generated.');tmpResult.executed=true;return fCallback();}var tmpCollection=tmpDB.collection(tmpOp.collection);var tmpUpdate=replaceSentinels(JSON.parse(JSON.stringify(tmpOp.update)));tmpCollection.updateMany(tmpOp.filter,tmpUpdate).then(function(pUpdateResult){tmpResult.error=null;tmpResult.value=pUpdateResult;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var Delete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MongoDB').buildDeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpDB=getDB();if(!tmpDB){tmpResult.error=new Error('No MongoDB connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.mongoOperation;var tmpCollection=tmpDB.collection(tmpOp.collection);if(tmpOp.operation==='updateMany'){// Soft delete
 var tmpUpdate=replaceSentinels(JSON.parse(JSON.stringify(tmpOp.update)));tmpCollection.updateMany(tmpOp.filter,tmpUpdate).then(function(pUpdateResult){tmpResult.error=null;tmpResult.value=pUpdateResult.modifiedCount;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}else{// Hard delete
 tmpCollection.deleteMany(tmpOp.filter).then(function(pDeleteResult){tmpResult.error=null;tmpResult.value=pDeleteResult.deletedCount;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}};var Undelete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MongoDB').buildUndeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpDB=getDB();if(!tmpDB){tmpResult.error=new Error('No MongoDB connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.mongoOperation;if(!tmpOp||tmpOp.operation==='noop'){tmpResult.error=null;tmpResult.value=0;tmpResult.executed=true;return fCallback();}var tmpCollection=tmpDB.collection(tmpOp.collection);var tmpUpdate=replaceSentinels(JSON.parse(JSON.stringify(tmpOp.update)));tmpCollection.updateMany(tmpOp.filter,tmpUpdate).then(function(pUpdateResult){tmpResult.error=null;tmpResult.value=pUpdateResult.modifiedCount;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MongoDB').buildCountQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpDB=getDB();if(!tmpDB){tmpResult.error=new Error('No MongoDB connection available.');tmpResult.executed=true;return fCallback();}var tmpOp=pQuery.query.parameters.mongoOperation;var tmpCollection=tmpDB.collection(tmpOp.collection);if(tmpOp.distinct&&tmpOp.distinctFields&&tmpOp.distinctFields.length>0){// Use aggregation pipeline for distinct count
-var tmpGroupId={};for(var i=0;i<tmpOp.distinctFields.length;i++){tmpGroupId[tmpOp.distinctFields[i]]='$'+tmpOp.distinctFields[i];}var tmpPipeline=[{$match:tmpOp.filter},{$group:{_id:tmpGroupId}},{$count:'RowCount'}];tmpCollection.aggregate(tmpPipeline).toArray().then(function(pResults){tmpResult.error=null;tmpResult.value=pResults.length>0?pResults[0].RowCount:0;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}else{tmpCollection.countDocuments(tmpOp.filter).then(function(pCount){tmpResult.error=null;tmpResult.value=pCount;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],234:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+var tmpGroupId={};for(var i=0;i<tmpOp.distinctFields.length;i++){tmpGroupId[tmpOp.distinctFields[i]]='$'+tmpOp.distinctFields[i];}var tmpPipeline=[{$match:tmpOp.filter},{$group:{_id:tmpGroupId}},{$count:'RowCount'}];tmpCollection.aggregate(tmpPipeline).toArray().then(function(pResults){tmpResult.error=null;tmpResult.value=pResults.length>0?pResults[0].RowCount:0;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}else{tmpCollection.countDocuments(tmpOp.filter).then(function(pCount){tmpResult.error=null;tmpResult.value=pCount;tmpResult.executed=true;return fCallback();}).catch(function(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;return fCallback();});}};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],234:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5112,7 +5299,7 @@ function(pError,pRows){pDBConnection.release();tmpResult.error=pError;tmpResult.
 function(pError,pRows){pDBConnection.release();tmpResult.error=pError;tmpResult.value=pRows;tmpResult.executed=true;return fCallback();});});};var Delete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MySQL').buildDeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpPool=getSQLPool();if(!tmpPool){tmpResult.error=new Error('No MySQL connection pool available.');tmpResult.executed=true;return fCallback();}tmpPool.getConnection(function(pError,pDBConnection){if(pError||!pDBConnection){_Fable.log.error('Error getting connection from MySQL pool during delete query: '+(pError?pError.message:'no connection returned'),{Body:pQuery.query.body});tmpResult.error=pError||new Error('No connection returned from pool.');tmpResult.executed=true;return fCallback();}pDBConnection.query(pQuery.query.body,pQuery.query.parameters,// The MySQL library also returns the Fields as the third parameter
 function(pError,pRows){pDBConnection.release();tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pRows.affectedRows;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during delete query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});});};var Undelete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MySQL').buildUndeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpPool=getSQLPool();if(!tmpPool){tmpResult.error=new Error('No MySQL connection pool available.');tmpResult.executed=true;return fCallback();}tmpPool.getConnection(function(pError,pDBConnection){if(pError||!pDBConnection){_Fable.log.error('Error getting connection from MySQL pool during undelete query: '+(pError?pError.message:'no connection returned'),{Body:pQuery.query.body});tmpResult.error=pError||new Error('No connection returned from pool.');tmpResult.executed=true;return fCallback();}pDBConnection.query(pQuery.query.body,pQuery.query.parameters,// The MySQL library also returns the Fields as the third parameter
 function(pError,pRows){pDBConnection.release();tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pRows.affectedRows;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during delete query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('MySQL').buildCountQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpPool=getSQLPool();if(!tmpPool){tmpResult.error=new Error('No MySQL connection pool available.');tmpResult.executed=true;return fCallback();}tmpPool.getConnection(function(pError,pDBConnection){if(pError||!pDBConnection){_Fable.log.error('Error getting connection from MySQL pool during count query: '+(pError?pError.message:'no connection returned'),{Body:pQuery.query.body});tmpResult.error=pError||new Error('No connection returned from pool.');tmpResult.executed=true;return fCallback();}pDBConnection.query(pQuery.query.body,pQuery.query.parameters,// The MySQL library also returns the Fields as the third parameter
-function(pError,pRows){pDBConnection.release();tmpResult.executed=true;tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pRows[0].RowCount;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],235:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+function(pError,pRows){pDBConnection.release();tmpResult.executed=true;tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pRows[0].RowCount;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],235:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5128,7 +5315,7 @@ pQuery.parameters.result.executed=true;pQuery.parameters.result.value=[true];fCa
 pQuery.parameters.result.executed=true;fCallback();};var Delete=function(pQuery,fCallback){// This does nothing because it's the none data provider!
 pQuery.parameters.result.executed=true;fCallback();};var Undelete=function(pQuery,fCallback){// This does nothing because it's the none data provider!
 pQuery.parameters.result.executed=true;fCallback();};var Count=function(pQuery,fCallback){// This does nothing because it's the none data provider!
-pQuery.parameters.result.executed=true;fCallback();};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],236:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+pQuery.parameters.result.executed=true;fCallback();};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],236:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5167,7 +5354,7 @@ var tmpHasReturning=!pQuery.query.disableAutoIdentity&&findAutoIdentityColumn(pQ
 // (empty) array. The post-update Read supplies the record.
 tmpResult.value=pDBResult&&pDBResult.rows?pDBResult.rows:[];tmpResult.executed=true;return fCallback();});};var Delete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;applyOracleParameters(pQuery);pQuery.setDialect('Oracle').buildDeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpProvider=getProvider();if(!tmpProvider){tmpResult.error=new Error('Meadow Oracle provider is not connected.');tmpResult.executed=true;return fCallback();}var tmpBinds=buildBinds(pQuery,tmpProvider.oracledb,false);executeStatement(pQuery.query.body,tmpBinds,function(pError,pDBResult){tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pDBResult?pDBResult.rowsAffected:0;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during delete query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});};var Undelete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;applyOracleParameters(pQuery);pQuery.setDialect('Oracle').buildUndeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpProvider=getProvider();if(!tmpProvider){tmpResult.error=new Error('Meadow Oracle provider is not connected.');tmpResult.executed=true;return fCallback();}var tmpBinds=buildBinds(pQuery,tmpProvider.oracledb,false);executeStatement(pQuery.query.body,tmpBinds,function(pError,pDBResult){tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pDBResult?pDBResult.rowsAffected:0;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during undelete query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;applyOracleParameters(pQuery);pQuery.setDialect('Oracle').buildCountQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpProvider=getProvider();if(!tmpProvider){tmpResult.error=new Error('Meadow Oracle provider is not connected.');tmpResult.executed=true;return fCallback();}var tmpBinds=buildBinds(pQuery,tmpProvider.oracledb,false);executeStatement(pQuery.query.body,tmpBinds,function(pError,pDBResult){tmpResult.executed=true;tmpResult.error=pError;tmpResult.value=false;try{// The COUNT column alias casing depends on quoting mode, so
 // read the first (only) column of the first row by position.
-var tmpRow=pDBResult.rows[0];var tmpKey=Object.keys(tmpRow)[0];tmpResult.value=parseInt(tmpRow[tmpKey],10);}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],237:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+var tmpRow=pDBResult.rows[0];var tmpKey=Object.keys(tmpRow)[0];tmpResult.value=parseInt(tmpRow[tmpKey],10);}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],237:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5201,7 +5388,7 @@ var tmpVirtualColumn=tmpProxyColumns[tmpColumn];try{pObject[tmpVirtualColumn]=ty
 if(pDBResult&&pDBResult.rows&&pDBResult.rows.length>0){var tmpSchema=Array.isArray(pQuery.query.schema)?pQuery.query.schema:[];var tmpIDColumn=false;for(var i=0;i<tmpSchema.length;i++){if(tmpSchema[i].Type==='AutoIdentity'){tmpIDColumn=tmpSchema[i].Column;break;}}if(tmpIDColumn&&pDBResult.rows[0].hasOwnProperty(tmpIDColumn)){tmpResult.value=pDBResult.rows[0][tmpIDColumn];}else{// Fall back to the first column of the first row
 var tmpFirstKey=Object.keys(pDBResult.rows[0])[0];tmpResult.value=pDBResult.rows[0][tmpFirstKey];}}}catch(pErrorGettingID){_Fable.log.warn('Error getting insert ID during create query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});};// This is a synchronous read, good for a few records.
 var Read=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('PostgreSQL').buildReadQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpConverted=convertNamedToPositional(pQuery.query.body,pQuery.query.parameters);getSQLPool().query(tmpConverted.text,tmpConverted.values,function(pError,pDBResult){tmpResult.error=pError;tmpResult.value=pDBResult?pDBResult.rows:[];tmpResult.executed=true;return fCallback();});};var Update=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('PostgreSQL').buildUpdateQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpConverted=convertNamedToPositional(pQuery.query.body,pQuery.query.parameters);getSQLPool().query(tmpConverted.text,tmpConverted.values,function(pError,pDBResult){tmpResult.error=pError;tmpResult.value=pDBResult?pDBResult.rows:[];tmpResult.executed=true;return fCallback();});};var Delete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('PostgreSQL').buildDeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpConverted=convertNamedToPositional(pQuery.query.body,pQuery.query.parameters);getSQLPool().query(tmpConverted.text,tmpConverted.values,function(pError,pDBResult){tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pDBResult?pDBResult.rowCount:0;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during delete query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});};var Undelete=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('PostgreSQL').buildUndeleteQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpConverted=convertNamedToPositional(pQuery.query.body,pQuery.query.parameters);getSQLPool().query(tmpConverted.text,tmpConverted.values,function(pError,pDBResult){tmpResult.error=pError;tmpResult.value=false;try{tmpResult.value=pDBResult?pDBResult.rowCount:0;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting affected rowcount during undelete query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}tmpResult.executed=true;return fCallback();});};var Count=function(pQuery,fCallback){var tmpResult=pQuery.parameters.result;pQuery.setDialect('PostgreSQL').buildCountQuery();if(pQuery.logLevel>0||_GlobalLogLevel>0){_Fable.log.trace(pQuery.query.body,pQuery.query.parameters);}var tmpConverted=convertNamedToPositional(pQuery.query.body,pQuery.query.parameters);getSQLPool().query(tmpConverted.text,tmpConverted.values,function(pError,pDBResult){tmpResult.executed=true;tmpResult.error=pError;tmpResult.value=false;try{// PostgreSQL COUNT(*) returns bigint, which the pg library delivers as a string
-tmpResult.value=parseInt(pDBResult.rows[0].rowcount,10);}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],238:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+tmpResult.value=parseInt(pDBResult.rows[0].rowcount,10);}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],238:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
  * Meadow provider that relays CRUD operations to a remote retold-databeacon
  * agent through an Ultravisor mesh. Structurally parallel to the
@@ -5228,7 +5415,7 @@ var tmpIdentityColumn=`ID${pQuery.parameters.scope}`;if(tmpResult.value&&tmpResu
 // so downstream Meadow-Read.js behavior gets the shape it expects.
 if(pQuery.query.body&&pQuery.query.body.startsWith(`${pQuery.parameters.scope}/`)){if(tmpResult.value!==undefined&&tmpResult.value!==null){tmpResult.value=[tmpResult.value];}}return fCallback();});};var Update=function(pQuery,fCallback){pQuery.setDialect(_Dialect).buildUpdateQuery();if(!pQuery.query.records||pQuery.query.records.length===0){pQuery.parameters.result.error='No records passed for proxying to Retold-DataBeacon.';return fCallback();}dispatch(pQuery,'PUT',function(){// Meadow Update waterfall's typeof check expects an object.
 // Leave tmpResult.value as-is.
-return fCallback();});};var Delete=function(pQuery,fCallback){pQuery.setDialect(_Dialect).buildDeleteQuery();dispatch(pQuery,'DELETE',function(){var tmpResult=pQuery.parameters.result;if(tmpResult.value&&tmpResult.value.hasOwnProperty('Count')){tmpResult.value=tmpResult.value.Count;}return fCallback();});};var Count=function(pQuery,fCallback){pQuery.setDialect(_Dialect).buildCountQuery();dispatch(pQuery,'GET',function(){var tmpResult=pQuery.parameters.result;try{tmpResult.value=tmpResult.value.Count;}catch(pErrorGettingRowCount){tmpResult.value=-1;_Fable.log.warn('MeadowProviderRetoldDataBeacon: error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],239:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+return fCallback();});};var Delete=function(pQuery,fCallback){pQuery.setDialect(_Dialect).buildDeleteQuery();dispatch(pQuery,'DELETE',function(){var tmpResult=pQuery.parameters.result;if(tmpResult.value&&tmpResult.value.hasOwnProperty('Count')){tmpResult.value=tmpResult.value.Count;}return fCallback();});};var Count=function(pQuery,fCallback){pQuery.setDialect(_Dialect).buildCountQuery();dispatch(pQuery,'GET',function(){var tmpResult=pQuery.parameters.result;try{tmpResult.value=tmpResult.value.Count;}catch(pErrorGettingRowCount){tmpResult.value=-1;_Fable.log.warn('MeadowProviderRetoldDataBeacon: error getting rowcount during count query',{Body:pQuery.query.body,Parameters:pQuery.query.parameters});}return fCallback();});};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Count:Count,getProvider:{},providerCreatesSupported:false,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],239:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -5441,7 +5628,7 @@ var tmpBindParams=filterUsedNamedParams(tmpQueryBody,pQuery.query.parameters);if
 // node:sqlite is strict about unknown named parameters, and
 // meadow auto-generates filter/Deleted/AutoGUID params that
 // a rawQueries override may not reference.
-var tmpBindParams=filterUsedNamedParams(tmpQueryBody,pQuery.query.parameters);if(pQuery.logLevel>0){_Fable.log.trace(tmpQueryBody,pQuery.query.parameters);}try{var tmpDB=getDB();if(!tmpDB){tmpResult.error=new Error('No SQLite database connection available.');tmpResult.executed=true;return fCallback();}var tmpStatement=tmpDB.prepare(tmpQueryBody);var tmpRows=tmpStatement.all(tmpBindParams);tmpResult.executed=true;tmpResult.error=null;tmpResult.value=false;try{tmpResult.value=tmpRows[0].RowCount;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:tmpQueryBody,Parameters:pQuery.query.parameters});}}catch(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;}return fCallback();};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],241:[function(require,module,exports){// ##### Part of the **[retold](https://stevenvelozo.github.io/retold/)** system
+var tmpBindParams=filterUsedNamedParams(tmpQueryBody,pQuery.query.parameters);if(pQuery.logLevel>0){_Fable.log.trace(tmpQueryBody,pQuery.query.parameters);}try{var tmpDB=getDB();if(!tmpDB){tmpResult.error=new Error('No SQLite database connection available.');tmpResult.executed=true;return fCallback();}var tmpStatement=tmpDB.prepare(tmpQueryBody);var tmpRows=tmpStatement.all(tmpBindParams);tmpResult.executed=true;tmpResult.error=null;tmpResult.value=false;try{tmpResult.value=tmpRows[0].RowCount;}catch(pErrorGettingRowcount){_Fable.log.warn('Error getting rowcount during count query',{Body:tmpQueryBody,Parameters:pQuery.query.parameters});}}catch(pError){tmpResult.error=pError;tmpResult.value=false;tmpResult.executed=true;}return fCallback();};var tmpNewProvider={marshalRecordFromSourceToObject:marshalRecordFromSourceToObject,Create:Create,Read:Read,Update:Update,Delete:Delete,Undelete:Undelete,Count:Count,getProvider:getProvider,providerCreatesSupported:true,new:createNew};return tmpNewProvider;}return createNew();};module.exports=new MeadowProvider();},{}],241:[function(require,module,exports){// ##### Part of the **[retold](https://fable-retold.io/)** system
 /**
 * @license MIT
 * @author <steven@velozo.com>
@@ -8045,7 +8232,7 @@ return tryTypedArrays(value);};}).call(this);}).call(this,typeof global!=="undef
 // presumably different callback function.
 // This makes sure that own properties are retained, so that
 // decorations and such are not lost along the way.
-module.exports=wrappy;function wrappy(fn,cb){if(fn&&cb)return wrappy(fn)(cb);if(typeof fn!=='function')throw new TypeError('need wrapper function');Object.keys(fn).forEach(function(k){wrapper[k]=fn[k];});return wrapper;function wrapper(){var args=new Array(arguments.length);for(var i=0;i<args.length;i++){args[i]=arguments[i];}var ret=fn.apply(this,args);var cb=args[args.length-1];if(typeof ret==='function'&&ret!==cb){Object.keys(cb).forEach(function(k){ret[k]=cb[k];});}return ret;}}},{}],366:[function(require,module,exports){module.exports=extend;var hasOwnProperty=Object.prototype.hasOwnProperty;function extend(){var target={};for(var i=0;i<arguments.length;i++){var source=arguments[i];for(var key in source){if(hasOwnProperty.call(source,key)){target[key]=source[key];}}}return target;}},{}],367:[function(require,module,exports){module.exports={"name":"meadow-endpoints","version":"4.1.3","description":"Automatic API endpoints for Meadow data.","main":"source/Meadow-Endpoints.js","scripts":{"start":"node source/Meadow-Endpoints.js","harness":"node debug/Harness.js","killharness":"debug/KillHarness.sh","coverage":"npx quack coverage","test":"npx quack test","tests":"npx quack test -g","build":"npx quack build","prepublishOnly":"npm run build","docker-dev-build-image":"docker build ./ -f Dockerfile_LUXURYCode -t retold/meadow-endpoints:local","docker-dev-run":"docker run -it -d --name meadow-endpoints-dev -p 12343:8080 -p 12305:3306 -p 18086:8086 -v \"$PWD/.config:/home/coder/.config\"  -v \"$PWD:/home/coder/meadow-endpoints\" -u \"$(id -u):$(id -g)\" -e \"DOCKER_USER=$USER\" retold/meadow-endpoints:local","check":"npx -p typescript tsc --noEmit"},"mocha":{"diff":true,"extension":["js"],"package":"./package.json","reporter":"spec","slow":"75","ui":"tdd","watch-files":["source/**/*.js","test/**/*.js"],"watch-ignore":["lib/vendor"]},"repository":{"type":"git","url":"https://github.com/fable-retold/meadow-endpoints.git"},"keywords":["crud","api"],"author":"Steven Velozo <steven@velozo.com> (http://velozo.com/)","license":"MIT","bugs":{"url":"https://github.com/fable-retold/meadow-endpoints/issues"},"homepage":"https://github.com/fable-retold/meadow-endpoints","devDependencies":{"alasql":"^4.17.3","chance":"^1.1.13","gulp-util":"^3.0.8","meadow-connection-sqlite":"^1.0.21","mysql2":"^3.23.2","orator-serviceserver-restify":"^2.0.12","papaparse":"^5.5.4","pict-docuserve":"^1.4.19","quackage":"^1.3.0","supertest":"^7.2.2","typescript":"^5.9.3","why-is-node-running":"^3.2.2"},"dependencies":{"async":"3.2.6","fable":"^3.1.80","fable-serviceproviderbase":"^3.0.19","JSONStream":"^1.3.5","meadow":"^2.0.47","meadow-filter":"^1.0.10","orator":"^6.1.3","underscore":"^1.13.8"}};},{}],368:[function(require,module,exports){/**
+module.exports=wrappy;function wrappy(fn,cb){if(fn&&cb)return wrappy(fn)(cb);if(typeof fn!=='function')throw new TypeError('need wrapper function');Object.keys(fn).forEach(function(k){wrapper[k]=fn[k];});return wrapper;function wrapper(){var args=new Array(arguments.length);for(var i=0;i<args.length;i++){args[i]=arguments[i];}var ret=fn.apply(this,args);var cb=args[args.length-1];if(typeof ret==='function'&&ret!==cb){Object.keys(cb).forEach(function(k){ret[k]=cb[k];});}return ret;}}},{}],366:[function(require,module,exports){module.exports=extend;var hasOwnProperty=Object.prototype.hasOwnProperty;function extend(){var target={};for(var i=0;i<arguments.length;i++){var source=arguments[i];for(var key in source){if(hasOwnProperty.call(source,key)){target[key]=source[key];}}}return target;}},{}],367:[function(require,module,exports){module.exports={"name":"meadow-endpoints","version":"4.1.4","description":"Automatic API endpoints for Meadow data.","main":"source/Meadow-Endpoints.js","scripts":{"start":"node source/Meadow-Endpoints.js","harness":"node debug/Harness.js","killharness":"debug/KillHarness.sh","coverage":"npx quack coverage","test":"npx quack test","tests":"npx quack test -g","build":"npx quack build","prepublishOnly":"npm run build","docker-dev-build-image":"docker build ./ -f Dockerfile_LUXURYCode -t retold/meadow-endpoints:local","docker-dev-run":"docker run -it -d --name meadow-endpoints-dev -p 12343:8080 -p 12305:3306 -p 18086:8086 -v \"$PWD/.config:/home/coder/.config\"  -v \"$PWD:/home/coder/meadow-endpoints\" -u \"$(id -u):$(id -g)\" -e \"DOCKER_USER=$USER\" retold/meadow-endpoints:local","check":"npx -p typescript tsc --noEmit"},"mocha":{"diff":true,"extension":["js"],"package":"./package.json","reporter":"spec","slow":"75","ui":"tdd","watch-files":["source/**/*.js","test/**/*.js"],"watch-ignore":["lib/vendor"]},"repository":{"type":"git","url":"https://github.com/fable-retold/meadow-endpoints.git"},"keywords":["crud","api"],"author":"Steven Velozo <steven@velozo.com> (http://velozo.com/)","license":"MIT","bugs":{"url":"https://github.com/fable-retold/meadow-endpoints/issues"},"homepage":"https://github.com/fable-retold/meadow-endpoints","devDependencies":{"alasql":"^4.17.3","chance":"^1.1.13","gulp-util":"^3.0.8","meadow-connection-sqlite":"^1.0.21","mysql2":"^3.23.3","orator-serviceserver-restify":"^2.0.12","papaparse":"^5.6.0","pict-docuserve":"^1.4.19","quackage":"^1.3.0","supertest":"^7.2.2","typescript":"^5.9.3","why-is-node-running":"^3.2.2"},"dependencies":{"async":"3.2.6","fable":"^3.1.81","fable-serviceproviderbase":"^3.0.19","JSONStream":"^1.3.5","meadow":"^2.0.49","meadow-filter":"^1.0.10","orator":"^6.1.3","underscore":"^1.13.8"}};},{}],368:[function(require,module,exports){/**
 * Meadow Endpoints - Version & Capability Metadata
 *
 * Builds the diagnostic version map and capability advertisement that the
