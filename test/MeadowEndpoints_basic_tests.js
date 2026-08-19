@@ -2835,5 +2835,221 @@ suite
 				);
 			}
 		);
+		suite
+		(
+			'Undelete',
+			function()
+			{
+				var _IDUndeleteAnimal = 0;
+
+				test
+				(
+					'undelete: create then delete a record to work with',
+					function(fDone)
+					{
+						_MockSessionValidUser.UserRoleIndex = 2;
+						libSuperTest('http://localhost:9080/')
+						.post('1.0/FableTest')
+						.send({Name:'Lazarus', Type:'Phoenix'})
+						.end(
+							function(pError, pResponse)
+							{
+								var tmpRecord = JSON.parse(pResponse.text);
+								Expect(tmpRecord.IDAnimal).to.be.above(0);
+								_IDUndeleteAnimal = tmpRecord.IDAnimal;
+
+								libSuperTest('http://localhost:9080/')
+								.del('1.0/FableTest/'+_IDUndeleteAnimal)
+								.end(
+									function(pDeleteError, pDeleteResponse)
+									{
+										Expect(JSON.parse(pDeleteResponse.text).Count).to.equal(1);
+										fDone();
+									}
+								);
+							}
+						);
+					}
+				);
+				test
+				(
+					'undelete: a deleted record is not readable',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.get('1.0/FableTest/'+_IDUndeleteAnimal)
+						.end(
+							function(pError, pResponse)
+							{
+								Expect(JSON.parse(pResponse.text).Error).to.contain('Record not found');
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'undelete: restore a deleted record',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.get('1.0/FableTest/Undelete/'+_IDUndeleteAnimal)
+						.end(
+							function(pError, pResponse)
+							{
+								Expect(JSON.parse(pResponse.text).Count).to.equal(1);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'undelete: the restored record is readable again',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.get('1.0/FableTest/'+_IDUndeleteAnimal)
+						.end(
+							function(pError, pResponse)
+							{
+								var tmpRecord = JSON.parse(pResponse.text);
+								Expect(tmpRecord.IDAnimal).to.equal(_IDUndeleteAnimal);
+								Expect(tmpRecord.Name).to.equal('Lazarus');
+								Expect(tmpRecord.Deleted).to.equal(0);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'undelete: undeleting a record which is not deleted changes nothing',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.get('1.0/FableTest/Undelete/'+_IDUndeleteAnimal)
+						.end(
+							function(pError, pResponse)
+							{
+								Expect(JSON.parse(pResponse.text).Count).to.equal(0);
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'undelete: undelete a record with a bad ID',
+					function(fDone)
+					{
+						libSuperTest('http://localhost:9080/')
+						.get('1.0/FableTest/Undelete/NotAnIdentifier')
+						.end(
+							function(pError, pResponse)
+							{
+								Expect(JSON.parse(pResponse.text).Error).to.contain('a valid record ID is required');
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
+					'undelete: pre and post operation behaviors are invoked',
+					function(fDone)
+					{
+						var tmpBehaviorsInvoked = [];
+
+						_MeadowEndpoints.behaviorModifications.setBehavior('Undelete-PreOperation',
+							function(pRequest, fComplete)
+							{
+								Expect(pRequest.Record.IDAnimal).to.equal(_IDUndeleteAnimal);
+								tmpBehaviorsInvoked.push('Pre');
+								return fComplete(false);
+							});
+						_MeadowEndpoints.behaviorModifications.setBehavior('Undelete-PostOperation',
+							function(pRequest, fComplete)
+							{
+								tmpBehaviorsInvoked.push('Post');
+								return fComplete(false);
+							});
+
+						libSuperTest('http://localhost:9080/')
+						.del('1.0/FableTest/'+_IDUndeleteAnimal)
+						.end(
+							function(pDeleteError, pDeleteResponse)
+							{
+								libSuperTest('http://localhost:9080/')
+								.get('1.0/FableTest/Undelete/'+_IDUndeleteAnimal)
+								.end(
+									function(pError, pResponse)
+									{
+										//clear out the behavior mapping to not affect other tests
+										_MeadowEndpoints.behaviorModifications.setBehavior('Undelete-PreOperation', null);
+										_MeadowEndpoints.behaviorModifications.setBehavior('Undelete-PostOperation', null);
+
+										Expect(JSON.parse(pResponse.text).Count).to.equal(1);
+										Expect(tmpBehaviorsInvoked).to.deep.equal(['Pre', 'Post']);
+										fDone();
+									}
+								);
+							}
+						);
+					}
+				);
+				test
+				(
+					'invoke undelete: restore a deleted record',
+					function(fDone)
+					{
+						_MeadowEndpoints.invokeEndpoint('Delete', {IDAnimal:_IDUndeleteAnimal}, {UserSession: _MockSessionValidUser},
+							function(pDeleteError, pDeleteResponse)
+							{
+								Expect(pDeleteResponse.body.Count).to.equal(1);
+
+								_MeadowEndpoints.invokeEndpoint('Undelete', {IDAnimal:_IDUndeleteAnimal}, {UserSession: _MockSessionValidUser},
+									function(pError, pResponse)
+									{
+										Expect(pResponse.body.Count).to.equal(1);
+										return fDone();
+									}
+								);
+							}
+						);
+					}
+				);
+				// Schemas predate the Undelete endpoint, so none of them define an Undelete
+				// authorizer; it has to be governed by the Delete authorizer instead of falling
+				// through to the permissive default.
+				test
+				(
+					'undelete: a role denied Delete is denied Undelete',
+					function(fDone)
+					{
+						_MeadowEndpoints.invokeEndpoint('Delete', {IDAnimal:_IDUndeleteAnimal}, {UserSession: _MockSessionValidUser},
+							function(pDeleteError, pDeleteResponse)
+							{
+								Expect(pDeleteResponse.body.Count).to.equal(1);
+
+								//set it to an undefined role, so the DefaultAPISecurity definitions of 'Deny' get used.
+								_MockSessionValidUser.UserRoleIndex = 5;
+
+								_MeadowEndpoints.invokeEndpoint('Undelete', {IDAnimal:_IDUndeleteAnimal}, {UserSession: _MockSessionValidUser},
+									function(pError, pResponse)
+									{
+										_MockSessionValidUser.UserRoleIndex = 2;
+
+										Expect(pResponse.body.ErrorCode).to.equal(405);
+										Expect(pResponse.body.Error).to.equal('UNAUTHORIZED ACCESS IS NOT ALLOWED');
+										return fDone();
+									}
+								);
+							}
+						);
+					}
+				);
+			}
+		);
 	}
 );

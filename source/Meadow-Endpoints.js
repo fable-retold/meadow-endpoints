@@ -68,6 +68,7 @@ var MeadowEndpoints = function()
 			Upserts: require('./crud/Meadow-Endpoint-BulkUpsert.js'),
 
 			Delete: require('./crud/Meadow-Endpoint-Delete.js'),
+			Undelete: require('./crud/Meadow-Endpoint-Undelete.js'),
 
 			Count: require('./crud/Meadow-Endpoint-Count.js'),
 			CountBy: require('./crud/Meadow-Endpoint-CountBy.js'),
@@ -188,6 +189,7 @@ var MeadowEndpoints = function()
 			Delete: true,
 			// DEL  [/1.0/SomeEndpoint]
 			// DEL  [/1.0/SomeEndpoint/:IDRecord]
+			// GET  [/1.0/SomeEndpoint/Undelete/:IDRecord]
 
 			Count: true,
 			// GET  [/1.0/SomeEndpoints/Count]
@@ -381,6 +383,7 @@ var MeadowEndpoints = function()
 			{
 				pRestServer.del(`${tmpEndpointPrefix}`, _CommonServices.bodyParser(), _EndpointAuthenticators.Delete, wireState, _Endpoints.Delete);
 				pRestServer.del(`${tmpEndpointPrefix}/:IDRecord`, _EndpointAuthenticators.Delete, wireState, _Endpoints.Delete);
+				pRestServer.get(`${tmpEndpointPrefix}/Undelete/:IDRecord`, _EndpointAuthenticators.Undelete || _EndpointAuthenticators.Delete, wireState, _Endpoints.Undelete);
 			}
 			if (_EnabledBehaviors.Count)
 			{

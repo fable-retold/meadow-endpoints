@@ -124,6 +124,37 @@ var MeadowAuthorizers = function()
 		};
 
 
+		/**
+		* Get the authorizer collection configured for the role of the requesting user, falling
+		* back to the default definition when the role has no collection of its own.
+		*/
+		var getRoleAuthorizer = function(pRequest)
+		{
+			var tmpRoleAuthorizer = pRequest.DAL.schemaFull.authorizer[pRequest.DAL.getRoleName(pRequest.UserSession.UserRoleIndex)];
+			if (!tmpRoleAuthorizer)
+			{
+				// Fallback to default definition, if present
+				tmpRoleAuthorizer = pRequest.DAL.schemaFull.authorizer['__DefaultAPISecurity'];
+			}
+
+			return tmpRoleAuthorizer;
+		};
+
+
+		/**
+		* Check whether the requesting user's role has an authorizer explicitly configured for an endpoint hash.
+		*
+		* Endpoints which are not represented in a schema's authorizer collection are authorized by default,
+		* so a newer endpoint can consult this to decide whether to defer to an older endpoint's configuration.
+		*/
+		var hasAuthorizerDefinition = function(pRequestHash, pRequest)
+		{
+			var tmpRoleAuthorizer = getRoleAuthorizer(pRequest);
+
+			return (typeof(tmpRoleAuthorizer) === 'object') && (tmpRoleAuthorizer !== null) && tmpRoleAuthorizer.hasOwnProperty(pRequestHash);
+		};
+
+
 		// Try to execute any defined authorizers on the proper endpoint
 		var authorizeRequest = function(pRequestHash, pRequest, fComplete)
 		{
@@ -138,12 +169,7 @@ var MeadowAuthorizers = function()
 
 
 			// See if there is an authorizer collection for the role of the user
-			var tmpRoleAuthorizer = pRequest.DAL.schemaFull.authorizer[pRequest.DAL.getRoleName(pRequest.UserSession.UserRoleIndex)];
-			if (!tmpRoleAuthorizer)
-			{
-				// Fallback to default definition, if present
-				tmpRoleAuthorizer = pRequest.DAL.schemaFull.authorizer['__DefaultAPISecurity'];
-			}
+			var tmpRoleAuthorizer = getRoleAuthorizer(pRequest);
 
 			// Authorizing Endpoint
 			//console.log(pRequestHash + ' >>> '+pRequest.DAL.getRoleName(pRequest.UserSession.UserRoleIndex)+'   -   '+pRequest.UserSession.UserRoleIndex+' Authorization Configuration: '+JSON.stringify(tmpRoleAuthorizer));
@@ -186,6 +212,7 @@ var MeadowAuthorizers = function()
 			getAuthorizer: getAuthorizer,
 			authorize: authorize,
 			authorizeRequest: authorizeRequest,
+			hasAuthorizerDefinition: hasAuthorizerDefinition,
 
 			new: createNew
 		});
