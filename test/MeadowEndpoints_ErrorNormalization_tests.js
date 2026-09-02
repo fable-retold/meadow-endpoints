@@ -19,7 +19,7 @@ const libMeadowEndpointsControllerBase = require('../source/controller/Meadow-En
 
 const _BookSchema = require('../test_support/model/meadow_schema/BookStore-MeadowSchema-Book.json');
 
-function buildController()
+function buildController(pControllerOptions)
 {
 	let tmpFable = new libFable({ Product: 'ErrorNormalizationTest', LogStreams: [ { streamtype: 'console', level: 'fatal' } ] });
 	let tmpMeadow = libMeadow.new(tmpFable, 'Book')
@@ -27,7 +27,7 @@ function buildController()
 		.setJsonSchema(_BookSchema.JsonSchema)
 		.setDefaultIdentifier(_BookSchema.DefaultIdentifier)
 		.setDefault(_BookSchema.DefaultObject);
-	return new libMeadowEndpointsControllerBase({ DAL: tmpMeadow, _ControllerOptions: {} });
+	return new libMeadowEndpointsControllerBase({ DAL: tmpMeadow, _ControllerOptions: (typeof(pControllerOptions) === 'object') ? pControllerOptions : {} });
 }
 
 function sendError(pController, pError)
@@ -171,5 +171,36 @@ suite('Meadow-Endpoints per-record error markers', () =>
 		}
 
 		Expect(tmpController.ErrorHandler.getErrorMessage({ Code: 500, Message: 'a legacy failure' })).to.equal('a legacy failure');
+	});
+});
+
+suite('Meadow-Endpoints SendErrorStatusCodes', () =>
+{
+	test('status codes are set when the option is unset', () =>
+	{
+		let tmpController = buildController();
+
+		let tmpResult = sendError(tmpController, tmpController.ErrorHandler.getError('Record not Found', 404));
+
+		Expect(tmpResult.StatusCode).to.equal(404);
+	});
+
+	test('status codes are set when the option is true', () =>
+	{
+		let tmpController = buildController({ SendErrorStatusCodes: true });
+
+		let tmpResult = sendError(tmpController, tmpController.ErrorHandler.getError('Record not Found', 404));
+
+		Expect(tmpResult.StatusCode).to.equal(404);
+	});
+
+	test('status codes are not set when the option is explicitly false', () =>
+	{
+		let tmpController = buildController({ SendErrorStatusCodes: false });
+
+		let tmpResult = sendError(tmpController, tmpController.ErrorHandler.getError('Record not Found', 404));
+
+		Expect(tmpResult.StatusCode).to.equal(null);
+		Expect(tmpResult.Body.Error).to.equal('Record not Found');
 	});
 });

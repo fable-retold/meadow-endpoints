@@ -149,7 +149,8 @@ class MeadowEndpointsControllerErrorBase
 		this._Controller.log.logRequestError(pRequest, pRequestState, tmpError);
 
 		// TODO: Detect if we've already sent headers?
-		if (!this._Controller.ControllerOptions.SendErrorStatusCodes)
+		// Unset means send them; only an explicit false opts out.
+		if (this._Controller.ControllerOptions.SendErrorStatusCodes !== false)
 		{
 			let tmpStatusCode = (typeof(tmpError.StatusCode) === 'number') ? tmpError.StatusCode : 500;
 			pResponse.status(tmpStatusCode);

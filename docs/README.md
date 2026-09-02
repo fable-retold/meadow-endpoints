@@ -239,7 +239,7 @@ The session object provides `UserID`, `CustomerID`, `SessionID`, `UserRole`, `Us
 | `MeadowDefaultMaxCap` | number | `250` | Default pagination limit for reads |
 | `MeadowEndpointsSessionDataSource` | string | `"Request"` | Session data source |
 | `MeadowEndpointsDefaultSessionObject` | object | `{CustomerID:0, UserID:0, ...}` | Default session template |
-| `SendErrorStatusCodes` | boolean | `false` | Set HTTP status codes on error responses |
+| `SendErrorStatusCodes` | boolean | `true` | Set HTTP status codes on error responses; set to `false` to answer errors at the transport's default status |
 
 ## Custom Controllers
 
