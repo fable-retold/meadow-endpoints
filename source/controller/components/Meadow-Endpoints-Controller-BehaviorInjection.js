@@ -36,7 +36,9 @@ class MeadowEndpointsControllerBehaviorInjectionBase
 	*	  return fCallback(false);
 	* }
 	*
-	* It is important to note that the fCallback function expects false if no error, or a string message if there is one.
+	* It is important to note that the fCallback function expects false if no error, or an error if there is one.
+	* An Error (ideally one from ErrorHandler.getError(), which carries an HTTP StatusCode) is preferred; a
+	* string message is still accepted and is normalized to a 500 by the error handler.
 	*/
 	setBehavior(pBehaviorHash, fBehavior)
 	{

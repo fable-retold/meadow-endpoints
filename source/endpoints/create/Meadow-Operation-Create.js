@@ -69,7 +69,7 @@ const doCreate = function(pRecord, pRequest, pRequestState, pResponse, fCallback
 	{
 		if (pError)
 		{
-			tmpRequestState.RecordToCreate.Error = pError;
+			tmpRequestState.RecordToCreate.Error = this.ErrorHandler.getErrorMessage(pError);
 
 			tmpRequestState.ParentRequestState.RecordCreateError = true;
 			tmpRequestState.ParentRequestState.RecordCreateErrorObject = pError;

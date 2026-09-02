@@ -32,7 +32,7 @@ const doAPIEndpointReadDistinct = function(pRequest, pResponse, fNext)
 				tmpRequestState.DistinctColumns = pRequest.params.Columns.split(',');
 				if (!tmpRequestState.DistinctColumns)
 				{
-					return fStageComplete({Code:400, Message:'Columns to distinct on must be provided.'});
+					return fStageComplete(this.ErrorHandler.getError('Columns to distinct on must be provided.', 400));
 				}
 				tmpRequestState.Query.setDataElements(tmpRequestState.DistinctColumns);
 			}

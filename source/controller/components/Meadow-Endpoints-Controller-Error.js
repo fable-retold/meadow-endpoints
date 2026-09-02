@@ -30,6 +30,106 @@ class MeadowEndpointsControllerErrorBase
 		return tmpError;
 	}
 
+	/**
+	 * Coerce anything that arrives on an error path into a MeadowEndpointError.
+	 *
+	 * The behavior injection contract (see Meadow-Endpoints-Controller-BehaviorInjection.js)
+	 * lets a handler signal failure with a string, and endpoints may still complete a
+	 * waterfall with a legacy {Code, Message} object. Neither carries a `message`, so
+	 * without this the response body and the log line both end up empty.
+	 *
+	 * @param {*} pError - the error to coerce, of any shape
+	 * @return {MeadowEndpointError} the error as a MeadowEndpointError
+	 */
+	normalizeError(pError)
+	{
+		if (pError instanceof Error)
+		{
+			const tmpNativeError = /** @type {MeadowEndpointError} */ (pError);
+
+			// Filled in place rather than rebuilt so the original stack survives.
+			if ((typeof(tmpNativeError.message) !== 'string') || (tmpNativeError.message.length < 1))
+			{
+				tmpNativeError.message = `Unknown ${tmpNativeError.name || 'Error'}.`;
+			}
+
+			return tmpNativeError;
+		}
+
+		if (typeof(pError) === 'string')
+		{
+			return this.getError(pError, 500);
+		}
+
+		if ((typeof(pError) === 'object') && (pError !== null))
+		{
+			// Legacy {Code, Message} errors carry an HTTP status in Code; anything else
+			// (a driver error code such as ER_BAD_FIELD_ERROR) is not a status code.
+			const tmpStatusCode = (typeof(pError.StatusCode) === 'number') ? pError.StatusCode
+				: ((typeof(pError.Code) === 'number') && (pError.Code >= 100) && (pError.Code <= 599)) ? pError.Code
+				: 500;
+
+			const tmpMessage = ((typeof(pError.Message) === 'string') && (pError.Message.length > 0)) ? pError.Message
+				: ((typeof(pError.message) === 'string') && (pError.message.length > 0)) ? pError.message
+				: this.describeError(pError);
+
+			const tmpError = this.getError(tmpMessage, tmpStatusCode, pError.SuppressSoftwareTrace);
+
+			if ((typeof(pError.code) === 'string') || (typeof(pError.code) === 'number'))
+			{
+				tmpError.code = String(pError.code);
+			}
+
+			return tmpError;
+		}
+
+		return this.getError(this.describeError(pError), 500);
+	}
+
+	/**
+	 * Flatten an error into a message string, for the in-band per-record failure markers
+	 * the bulk endpoints attach to a returned record.
+	 *
+	 * A raw Error cannot be used there: `message` is not an enumerable own property, so
+	 * JSON.stringify drops it and the marker reaches the client with no message at all.
+	 *
+	 * @param {*} pError - the error to flatten, of any shape
+	 * @return {string} the error message
+	 */
+	getErrorMessage(pError)
+	{
+		return this.normalizeError(pError).message;
+	}
+
+	/**
+	 * Describe an error value that carries no message of its own, so its payload still
+	 * reaches the log and the client rather than being flattened to [object Object].
+	 *
+	 * @param {*} pError - the error value to describe
+	 * @return {string} a serialized description of the error
+	 */
+	describeError(pError)
+	{
+		try
+		{
+			const tmpSerializedError = JSON.stringify(pError);
+
+			if ((typeof(tmpSerializedError) === 'string') && (tmpSerializedError !== '{}'))
+			{
+				return (tmpSerializedError.length > 512) ? tmpSerializedError.substring(0, 512) : tmpSerializedError;
+			}
+		}
+		catch (pSerializationError)
+		{
+			// Fall through to the tag-based description below.
+		}
+
+		// Object.prototype.toString is used rather than String() because it is safe for
+		// null-prototype and Symbol.toPrimitive-hostile values, which would otherwise
+		// throw from inside the error handler itself.
+		return Object.prototype.toString.call(pError);
+	}
+
 	// Handle an error if set -- some errors don't send the response back because they aren't fully errory errors.
 	handleErrorIfSet(pRequest, pRequestState, pResponse, pError, fCallback)
 	{
@@ -44,26 +144,28 @@ class MeadowEndpointsControllerErrorBase
 	// Send an error object
 	sendError(pRequest, pRequestState, pResponse, pError, fCallback)
 	{
-		this._Controller.log.logRequestError(pRequest, pRequestState, pError);
+		const tmpError = this.normalizeError(pError);
+
+		this._Controller.log.logRequestError(pRequest, pRequestState, tmpError);
 
 		// TODO: Detect if we've already sent headers?
 		if (!this._Controller.ControllerOptions.SendErrorStatusCodes)
 		{
-			let tmpStatusCode = (pError.hasOwnProperty('StatusCode')) ? pError.StatusCode : 500;
+			let tmpStatusCode = (typeof(tmpError.StatusCode) === 'number') ? tmpError.StatusCode : 500;
 			pResponse.status(tmpStatusCode);
 		}
 
 		let tmpResponseObject = (
 			{
-				Error:pError.message,
-				StatusCode:pError.StatusCode
+				Error:tmpError.message,
+				StatusCode:tmpError.StatusCode
 			});
 
-		tmpResponseObject = this._Controller.ErrorHandler.prepareRequestContextOutputObject(tmpResponseObject, pRequest, pRequestState, pError);
+		tmpResponseObject = this._Controller.ErrorHandler.prepareRequestContextOutputObject(tmpResponseObject, pRequest, pRequestState, tmpError);
 
 		pResponse.send(tmpResponseObject);
 
-		fCallback(pError);
+		fCallback(tmpError);
 	}
 
 	// This looks for some generic markers in the request state and puts them into a log or send object

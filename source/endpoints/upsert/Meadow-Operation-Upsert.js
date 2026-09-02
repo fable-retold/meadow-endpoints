@@ -132,7 +132,7 @@ const doUpsert = function(pRecordToUpsert, pRequest, pRequestState, pResponse, f
 		{
 			if (pError)
 			{
-				tmpRequestState.Record.Error = pError;
+				tmpRequestState.Record.Error = this.ErrorHandler.getErrorMessage(pError);
 				// Surface per-row failures back to the bulk caller. The
 				// parent BulkUpsert endpoint reads this array to count
 				// errors and signal partial-success to clients via a
@@ -141,7 +141,7 @@ const doUpsert = function(pRecordToUpsert, pRequest, pRequestState, pResponse, f
 				// reflects what survived.
 				if (tmpRequestState.ParentRequestState && Array.isArray(tmpRequestState.ParentRequestState.ErrorRecords))
 				{
-					let tmpErrorMessage = (pError && (pError.message || pError.Error)) ? (pError.message || pError.Error) : String(pError);
+					let tmpErrorMessage = this.ErrorHandler.getErrorMessage(pError);
 					tmpRequestState.ParentRequestState.ErrorRecords.push({
 						Record: tmpRequestState.Record,
 						Operation: tmpRequestState.Operation || 'Unknown',

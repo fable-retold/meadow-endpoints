@@ -10,7 +10,7 @@ const doUpdate = function(pRecordToModify, pRequest, pRequestState, pResponse, f
 	// If there is not a default identifier or cached record, fail
 	if ((pRecordToModify[this.DAL.defaultIdentifier] < 1) && (typeof(pOptionalCachedUpdatingRecord) === 'undefined'))
 	{
-		return fCallback('Record update failure - a valid record ID is required in the passed-in record.');
+		return fCallback(this.ErrorHandler.getError('Record update failure - a valid record ID is required in the passed-in record.', 400));
 	}
 
 	if (!Array.isArray(tmpRequestState.ParentRequestState.UpdatedRecords))
@@ -115,11 +115,11 @@ const doUpdate = function(pRecordToModify, pRequest, pRequestState, pResponse, f
 			// Ensure we have a record object to attach the error to
 			if (tmpRequestState.Record)
 			{
-				tmpRequestState.Record.Error = pError;
+				tmpRequestState.Record.Error = this.ErrorHandler.getErrorMessage(pError);
 			}
 			else
 			{
-				tmpRequestState.Record = { Error: pError };
+				tmpRequestState.Record = { Error: this.ErrorHandler.getErrorMessage(pError) };
 			}
 
 			tmpRequestState.ParentRequestState.RecordUpdateError = true;
