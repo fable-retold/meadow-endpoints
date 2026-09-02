@@ -52,7 +52,7 @@
     "chance": "^1.1.13",
     "gulp-util": "^3.0.8",
     "meadow-connection-sqlite": "^1.0.22",
-    "mysql2": "^3.24.2",
+    "mysql2": "^3.24.3",
     "orator-serviceserver-restify": "^2.0.12",
     "papaparse": "^5.7.0",
     "pict-docuserve": "^1.4.19",
