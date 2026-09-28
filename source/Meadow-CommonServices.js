@@ -148,6 +148,11 @@ var MeadowCommonServices = function()
 			}
 
 			_Log.warn('API Error: '+tmpResolvedError.Message, {SessionID: tmpSessionID, RequestID:pRequest.RequestUUID, RequestURL:pRequest.url, Scope: tmpScope, Parameters: tmpParams, Action:'APIError', ErrorCode: tmpResolvedError.Code, ErrorSourceCode: tmpResolvedError.SourceCode, Stack: tmpResolvedError.Stack}, pRequest);
+			if (Number(tmpResolvedError.Code) === 405)
+			{
+				// The authorizers report a refusal as code 405; over HTTP that is a 403, while ErrorCode keeps 405 for existing consumers.
+				pResponse.statusCode = 403;
+			}
 			pResponse.send({Error:tmpResolvedError.Message, ErrorCode: tmpResolvedError.Code});
 
 			return fNext();
@@ -208,8 +213,7 @@ var MeadowCommonServices = function()
 			if (pRequest.UserSession.UserRoleIndex < pRequest.EndpointAuthorizationRequirement)
 			{
 				_Log.warn('Invalid permission level when attempting to get a secured resource.', {SessionID:pRequest.UserSession.SessionID, RequestID:pRequest.RequestUUID, RequestURL:pRequest.url, Action:'APISecurity', RequiredUserLevel:pRequest.EndpointAuthorizationRequirement, 				ActualUserLevel:pRequest.UserSession.UserRoleIndex}, pRequest);
-				// TODO: Send the proper http status code
-				sendNotAuthorized('You must be appropriately authenticated to access this resource.', pRequest, pResponse, fNext);
+				sendNotAuthorized('You must be appropriately authenticated to access this resource.', pRequest, pResponse, fNext, 403);
 				return false;
 			}
 
@@ -222,18 +226,26 @@ var MeadowCommonServices = function()
 		 *
 		 * @method sendNotAuthorized
 		 */
-		var sendNotAuthorized = function(pMessage, pRequest, pResponse, fNext)
+		var sendNotAuthorized = function(pMessage, pRequest, pResponse, fNext, pStatusCode)
 		{
-			// TODO: Use the proper http code
-			_Log.trace('API Unauthorized Attempt: '+pMessage, {SessionID:pRequest.UserSession.SessionID, RequestID:pRequest.RequestUUID, RequestURL:pRequest.url, Action:'APIUnauthorized'}, pRequest);
+			var tmpStatusCode = pStatusCode || 401;
+			_Log.trace('API Unauthorized Attempt: '+pMessage, {SessionID:pRequest.UserSession.SessionID, RequestID:pRequest.RequestUUID, RequestURL:pRequest.url, Action:'APIUnauthorized', StatusCode: tmpStatusCode}, pRequest);
 
-			//cause a delay to mitigate DoS type attacks against endpoints
-			setTimeout(function()
+			var fSend = function()
 			{
-				pResponse.send({Error:pMessage});
+				pResponse.statusCode = tmpStatusCode;
+				pResponse.send({Error:pMessage, ErrorCode:tmpStatusCode});
 
 				return fNext();
-			}, (_Meadow.fable.settings.UnauthorizedRequestDelay ? _Meadow.fable.settings.UnauthorizedRequestDelay : 15000));
+			};
+
+			// The delay mitigates DoS attempts from remote callers; a programmatic invocation would only stall its own caller.
+			if (pRequest.EndpointInvokedInProcess)
+			{
+				return fSend();
+			}
+
+			setTimeout(fSend, (_Meadow.fable.settings.UnauthorizedRequestDelay ? _Meadow.fable.settings.UnauthorizedRequestDelay : 15000));
 		};
 
 

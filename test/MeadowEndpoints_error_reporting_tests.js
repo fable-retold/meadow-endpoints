@@ -9,7 +9,7 @@ var Expect = Chai.expect;
 
 var libMeadowCommonServices = require('../source/Meadow-CommonServices.js');
 
-var createHarness = function()
+var createHarness = function(pSettings)
 {
 	var tmpHarness = (
 	{
@@ -22,10 +22,14 @@ var createHarness = function()
 	{
 		fable:
 		{
-			settings: {},
+			settings: pSettings || {},
 			log:
 			{
 				warn: function(pMessage, pDatum)
+				{
+					tmpHarness.LogEntries.push({ Message: pMessage, Datum: pDatum });
+				},
+				trace: function(pMessage, pDatum)
 				{
 					tmpHarness.LogEntries.push({ Message: pMessage, Datum: pDatum });
 				}
@@ -192,6 +196,103 @@ suite
 
 						Expect(tmpSent.Error).to.equal('Something went wrong.');
 						Expect(tmpSent.ErrorCode).to.equal(1);
+					}
+				);
+			}
+		);
+
+		suite
+		(
+			'refusal status codes',
+			function()
+			{
+				test
+				(
+					'an authorizer refusal (code 405) is answered with HTTP 403 and keeps ErrorCode 405',
+					function()
+					{
+						var tmpHarness = createHarness();
+
+						var tmpSent = tmpHarness.sendCodedError('Error retreiving records by value.', { Code: 405, Message: 'UNAUTHORIZED ACCESS IS NOT ALLOWED' });
+
+						Expect(tmpHarness.Response.statusCode).to.equal(403);
+						Expect(tmpSent.ErrorCode).to.equal(405);
+					}
+				);
+
+				test
+				(
+					'other coded errors leave the HTTP status alone',
+					function()
+					{
+						var tmpHarness = createHarness();
+
+						tmpHarness.sendCodedError('Error retreiving records by value.', { Code: 1, Message: 'Something went wrong' });
+
+						Expect(tmpHarness.Response.statusCode).to.equal(undefined);
+					}
+				);
+
+				test
+				(
+					'an unauthenticated request is answered with 401 and ErrorCode 401, after the configured delay',
+					function(fDone)
+					{
+						var tmpHarness = createHarness({ UnauthorizedRequestDelay: 20 });
+						tmpHarness.Request.EndpointAuthenticated = true;
+						tmpHarness.Request.UserSession = { SessionID: 'SESSION-TEST', UserID: 0, UserRoleIndex: 0 };
+
+						var tmpAuthorized = tmpHarness.CommonServices.authorizeEndpoint(tmpHarness.Request, tmpHarness.Response,
+							function()
+							{
+								Expect(tmpHarness.Response.statusCode).to.equal(401);
+								Expect(tmpHarness.Sent).to.deep.equal({ Error: 'You must be authenticated to access this resource.', ErrorCode: 401 });
+								return fDone();
+							});
+
+						Expect(tmpAuthorized).to.equal(false);
+						Expect(tmpHarness.Sent).to.equal(null);
+					}
+				);
+
+				test
+				(
+					'a request below the endpoint\'s required level is answered with 403',
+					function(fDone)
+					{
+						var tmpHarness = createHarness({ UnauthorizedRequestDelay: 1 });
+						tmpHarness.Request.EndpointAuthenticated = true;
+						tmpHarness.Request.EndpointAuthorizationRequirement = 3;
+						tmpHarness.Request.UserSession = { SessionID: 'SESSION-TEST', UserID: 7, UserRoleIndex: 1 };
+
+						tmpHarness.CommonServices.authorizeEndpoint(tmpHarness.Request, tmpHarness.Response,
+							function()
+							{
+								Expect(tmpHarness.Response.statusCode).to.equal(403);
+								Expect(tmpHarness.Sent.ErrorCode).to.equal(403);
+								return fDone();
+							});
+					}
+				);
+
+				test
+				(
+					'an in-process invocation is refused immediately, without the remote-caller delay',
+					function()
+					{
+						var tmpHarness = createHarness({ UnauthorizedRequestDelay: 60000 });
+						tmpHarness.Request.EndpointAuthenticated = true;
+						tmpHarness.Request.EndpointInvokedInProcess = true;
+						tmpHarness.Request.UserSession = { SessionID: 'SESSION-TEST', UserID: 0, UserRoleIndex: 0 };
+
+						tmpHarness.CommonServices.authorizeEndpoint(tmpHarness.Request, tmpHarness.Response,
+							function()
+							{
+								tmpHarness.NextCalled = true;
+							});
+
+						Expect(tmpHarness.NextCalled).to.equal(true);
+						Expect(tmpHarness.Sent).to.deep.equal({ Error: 'You must be authenticated to access this resource.', ErrorCode: 401 });
 					}
 				);
 			}

@@ -487,6 +487,8 @@ var MeadowEndpoints = function()
 					pRequest.Satchel = pOptions.Satchel;
 					//internal invoke mark as authenticated (because this is not called via webservice)
 					pRequest.EndpointAuthenticated = true;
+					//and as in-process, so refusals are answered without the remote-caller delay
+					pRequest.EndpointInvokedInProcess = true;
 
 					if (_InvokeSetupCallback && typeof(_InvokeSetupCallback) == 'function')
 					{

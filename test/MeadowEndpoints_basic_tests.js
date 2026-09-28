@@ -1860,6 +1860,29 @@ suite
 				);
 				test
 				(
+					'invoke: the in-process marker is set on the invocation\'s own request, never on the caller\'s',
+					function(fDone)
+					{
+						let passedRequest;
+						_MeadowEndpoints.setInvokeSetupCallback((req, res, origReq) =>
+						{
+							passedRequest = req;
+						});
+						const originalRequest = {UserSession: _MockSessionValidUser};
+						_MeadowEndpoints.invokeEndpoint('Read', {IDRecord: 2}, originalRequest,
+							function(pError, pResponse)
+							{
+								Expect(passedRequest.EndpointInvokedInProcess).to.equal(true);
+								Expect(passedRequest).to.not.equal(originalRequest);
+								Expect(originalRequest).to.not.have.property('EndpointInvokedInProcess');
+
+								fDone();
+							}
+						);
+					}
+				);
+				test
+				(
 					'invoke create: create a record',
 					function(fDone)
 					{
