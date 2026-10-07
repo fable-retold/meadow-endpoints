@@ -257,21 +257,65 @@ suite
 
 				test
 				(
-					'a request below the endpoint\'s required level is answered with 403',
-					function(fDone)
+					'a request below the endpoint\'s required level is answered with 403 immediately, even with a delay configured',
+					function()
 					{
-						var tmpHarness = createHarness({ UnauthorizedRequestDelay: 1 });
+						var tmpHarness = createHarness({ UnauthorizedRequestDelay: 60000 });
 						tmpHarness.Request.EndpointAuthenticated = true;
 						tmpHarness.Request.EndpointAuthorizationRequirement = 3;
 						tmpHarness.Request.UserSession = { SessionID: 'SESSION-TEST', UserID: 7, UserRoleIndex: 1 };
 
+						var tmpAuthorized = tmpHarness.CommonServices.authorizeEndpoint(tmpHarness.Request, tmpHarness.Response,
+							function()
+							{
+								tmpHarness.NextCalled = true;
+							});
+
+						Expect(tmpAuthorized).to.equal(false);
+						Expect(tmpHarness.NextCalled).to.equal(true);
+						Expect(tmpHarness.Response.statusCode).to.equal(403);
+						Expect(tmpHarness.Sent).to.deep.equal({ Error: 'You must be appropriately authenticated to access this resource.', ErrorCode: 403 });
+					}
+				);
+
+				test
+				(
+					'an unauthenticated request is answered immediately when no delay is configured',
+					function()
+					{
+						var tmpHarness = createHarness();
+						tmpHarness.Request.EndpointAuthenticated = true;
+						tmpHarness.Request.UserSession = { SessionID: 'SESSION-TEST', UserID: 0, UserRoleIndex: 0 };
+
 						tmpHarness.CommonServices.authorizeEndpoint(tmpHarness.Request, tmpHarness.Response,
 							function()
 							{
-								Expect(tmpHarness.Response.statusCode).to.equal(403);
-								Expect(tmpHarness.Sent.ErrorCode).to.equal(403);
-								return fDone();
+								tmpHarness.NextCalled = true;
 							});
+
+						Expect(tmpHarness.NextCalled).to.equal(true);
+						Expect(tmpHarness.Response.statusCode).to.equal(401);
+						Expect(tmpHarness.Sent).to.deep.equal({ Error: 'You must be authenticated to access this resource.', ErrorCode: 401 });
+					}
+				);
+
+				test
+				(
+					'a configured delay of zero is honoured rather than replaced by a default',
+					function()
+					{
+						var tmpHarness = createHarness({ UnauthorizedRequestDelay: 0 });
+						tmpHarness.Request.EndpointAuthenticated = true;
+						tmpHarness.Request.UserSession = { SessionID: 'SESSION-TEST', UserID: 0, UserRoleIndex: 0 };
+
+						tmpHarness.CommonServices.authorizeEndpoint(tmpHarness.Request, tmpHarness.Response,
+							function()
+							{
+								tmpHarness.NextCalled = true;
+							});
+
+						Expect(tmpHarness.NextCalled).to.equal(true);
+						Expect(tmpHarness.Response.statusCode).to.equal(401);
 					}
 				);
 

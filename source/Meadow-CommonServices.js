@@ -239,13 +239,14 @@ var MeadowCommonServices = function()
 				return fNext();
 			};
 
-			// The delay mitigates DoS attempts from remote callers; a programmatic invocation would only stall its own caller.
-			if (pRequest.EndpointInvokedInProcess)
+			// The optional delay applies only to unauthenticated remote callers; an authenticated caller refused for its level, or a programmatic invocation, is answered at once.
+			var tmpDelay = Number(_Meadow.fable.settings.UnauthorizedRequestDelay) || 0;
+			if ((tmpStatusCode !== 401) || pRequest.EndpointInvokedInProcess || (tmpDelay <= 0))
 			{
 				return fSend();
 			}
 
-			setTimeout(fSend, (_Meadow.fable.settings.UnauthorizedRequestDelay ? _Meadow.fable.settings.UnauthorizedRequestDelay : 15000));
+			setTimeout(fSend, tmpDelay);
 		};
 
 
